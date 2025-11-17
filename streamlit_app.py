@@ -756,7 +756,7 @@ def _build_test_library() -> List[Dict]:
             "procedure": [
                 "Pull sealed oil samples using clean syringes following ASTM D923.",
                 "Analyze gases per ASTM D3612 and trend CO, C2H2, C2H4, CH4, and H2.",
-                "Compare total dissolved combustible gas (TDCG) to IEEE C57.104/NETA action levels.",
+                "Compare total dissolved combustible gas (TDCG) and individual key gases to IEEE C57.104/NETA/IEC 60599 action levels.",
             ],
             "interpretation": "Action levels dictate whether to increase sampling frequency, schedule an outage, or remove the unit from service.",
             "criteria": [
@@ -769,7 +769,67 @@ def _build_test_library() -> List[Dict]:
                     "maximum": 7200,
                     "investigate_above": 3600,
                     "note": ">7200 ppm typically triggers immediate outage planning per IEEE C57.104 Table 2.",
-                }
+                },
+                {
+                    "id": "dga_h2",
+                    "label": "Hydrogen (H₂)",
+                    "parameter": "Concentration",
+                    "unit": "ppm",
+                    "evaluation_type": "absolute",
+                    "maximum": 1800,
+                    "investigate_above": 135,
+                    "note": "Hydrogen aligns with partial discharge/corona cues in IEEE C57.104 and IEC 60599.",
+                },
+                {
+                    "id": "dga_ch4",
+                    "label": "Methane (CH₄)",
+                    "parameter": "Concentration",
+                    "unit": "ppm",
+                    "evaluation_type": "absolute",
+                    "maximum": 1000,
+                    "investigate_above": 120,
+                    "note": "Methane typically points to low-temperature faults when it departs from IEEE C57.104 Condition 1.",
+                },
+                {
+                    "id": "dga_c2h6",
+                    "label": "Ethane (C₂H₆)",
+                    "parameter": "Concentration",
+                    "unit": "ppm",
+                    "evaluation_type": "absolute",
+                    "maximum": 150,
+                    "investigate_above": 65,
+                    "note": "IEC 60599 treats ethane as the first sign of localized overheating (oil faults).",
+                },
+                {
+                    "id": "dga_c2h4",
+                    "label": "Ethylene (C₂H₄)",
+                    "parameter": "Concentration",
+                    "unit": "ppm",
+                    "evaluation_type": "absolute",
+                    "maximum": 350,
+                    "investigate_above": 50,
+                    "note": "Ethylene growth above ~50 ppm points to high-temperature faults per IEEE C57.104.",
+                },
+                {
+                    "id": "dga_c2h2",
+                    "label": "Acetylene (C₂H₂)",
+                    "parameter": "Concentration",
+                    "unit": "ppm",
+                    "evaluation_type": "absolute",
+                    "maximum": 80,
+                    "investigate_above": 35,
+                    "note": "Any acetylene rise is a red flag for arcing events in IEEE C57.104 and IEC 60599.",
+                },
+                {
+                    "id": "dga_co",
+                    "label": "Carbon monoxide (CO)",
+                    "parameter": "Concentration",
+                    "unit": "ppm",
+                    "evaluation_type": "absolute",
+                    "maximum": 1400,
+                    "investigate_above": 350,
+                    "note": "CO/CO₂ balance helps gauge cellulose overheating — values paraphrased from IEEE C57.104.",
+                },
             ],
             "diagnostics": {
                 "watch": "TDCG trending upward but still <1800 ppm.",
@@ -781,9 +841,65 @@ def _build_test_library() -> List[Dict]:
                 "Investigate": "Elevated TDCG or accelerating key-gas growth implies developing faults — increase sampling and plan targeted electrical tests before peak season.",
                 "Fail": "Condition 4 concentrations indicate an active fault; schedule an outage immediately to avoid catastrophic failure.",
             },
+            "gas_thresholds": [
+                {
+                    "id": "h2",
+                    "gas": "Hydrogen (H₂)",
+                    "condition_2": 135,
+                    "condition_3": 700,
+                    "condition_4": 1800,
+                    "faults": "Partial discharge / corona inside windings or bushings.",
+                    "insight": "Track after breaker faults or tap-changer work where ionization is expected.",
+                },
+                {
+                    "id": "ch4",
+                    "gas": "Methane (CH₄)",
+                    "condition_2": 120,
+                    "condition_3": 400,
+                    "condition_4": 1000,
+                    "faults": "Low-temperature oil faults (hot spots <300 °C).",
+                    "insight": "Often grows with ethane when oil circulation is impeded.",
+                },
+                {
+                    "id": "c2h6",
+                    "gas": "Ethane (C₂H₆)",
+                    "condition_2": 65,
+                    "condition_3": 100,
+                    "condition_4": 150,
+                    "faults": "Localized overheating of oil and solid insulation.",
+                    "insight": "Pairs with methane when hot spots are transitioning from thermal to electrical faults.",
+                },
+                {
+                    "id": "c2h4",
+                    "gas": "Ethylene (C₂H₄)",
+                    "condition_2": 50,
+                    "condition_3": 200,
+                    "condition_4": 350,
+                    "faults": "High-temperature faults (>500 °C) on windings or leads.",
+                    "insight": "Compare with load/tap-changer activity to see if hot-spot limits are exceeded.",
+                },
+                {
+                    "id": "c2h2",
+                    "gas": "Acetylene (C₂H₂)",
+                    "condition_2": 35,
+                    "condition_3": 50,
+                    "condition_4": 80,
+                    "faults": "Arcing, high-energy discharges, or bad tap selectors.",
+                    "insight": "Even small spikes warrant inspection because arcing is not normal in GSUs.",
+                },
+                {
+                    "id": "co",
+                    "gas": "Carbon monoxide (CO)",
+                    "condition_2": 350,
+                    "condition_3": 570,
+                    "condition_4": 1400,
+                    "faults": "Cellulose overheating / paper degradation.",
+                    "insight": "Review CO/CO₂ ratio trends to separate thermal aging from moisture ingress.",
+                },
+            ],
             "deep_dive": {
                 "title": "Making DGA actionable",
-                "summary": "Oil samples are one of the earliest warning tools for PV GSUs because generation is often remote and lightly staffed. Translating raw gas ppm into actions keeps outages planned instead of forced.",
+                "summary": "Oil samples are one of the earliest warning tools for PV GSUs because generation is often remote and lightly staffed. Translating raw gas ppm into actions keeps outages planned instead of forced. Key-gas guidance is paraphrased from IEEE C57.104-2019 and IEC 60599 so readers know which standards to consult for contractual limits.",
                 "sections": [
                     {
                         "title": "What to trend",
@@ -809,6 +925,14 @@ def _build_test_library() -> List[Dict]:
                             "Prepare contingency plans (mobile transformer, curtailment schedule) before mandatory outage is declared.",
                         ],
                     },
+                    {
+                        "title": "Tie back to standards",
+                        "bullets": [
+                            "IEEE C57.104 supplies the Condition 1–4 guideposts for TDCG and individual gases.",
+                            "IEC 60599 expands on gas ratios (Duval triangle) if you need to pinpoint fault type.",
+                            "ASTM D3612 describes the test method and reporting units so chain-of-custody stays defensible.",
+                        ],
+                    },
                 ],
                 "tables": [
                     {
@@ -821,6 +945,19 @@ def _build_test_library() -> List[Dict]:
                             {"Condition": "4", "TDCG (ppm)": ">4630", "Recommended action": "Immediate engineering review and outage scheduling."},
                         ],
                         "caption": "Values paraphrased from IEEE C57.104 to reinforce the decision logic without reproducing the standard.",
+                    },
+                    {
+                        "title": "Key-gas cues",
+                        "columns": ["Gas", "Condition 2", "Condition 3", "Condition 4", "Likely issue"],
+                        "rows": [
+                            {"Gas": "H₂", "Condition 2": "135 ppm", "Condition 3": "700 ppm", "Condition 4": "1800 ppm", "Likely issue": "Corona / partial discharge."},
+                            {"Gas": "CH₄", "Condition 2": "120 ppm", "Condition 3": "400 ppm", "Condition 4": "1000 ppm", "Likely issue": "Low-temp thermal faults."},
+                            {"Gas": "C₂H₆", "Condition 2": "65 ppm", "Condition 3": "100 ppm", "Condition 4": "150 ppm", "Likely issue": "Localized overheating."},
+                            {"Gas": "C₂H₄", "Condition 2": "50 ppm", "Condition 3": "200 ppm", "Condition 4": "350 ppm", "Likely issue": "High-temp hot spots."},
+                            {"Gas": "C₂H₂", "Condition 2": "35 ppm", "Condition 3": "50 ppm", "Condition 4": "80 ppm", "Likely issue": "Arcing / tap changer faults."},
+                            {"Gas": "CO", "Condition 2": "350 ppm", "Condition 3": "570 ppm", "Condition 4": "1400 ppm", "Likely issue": "Cellulose overheating."},
+                        ],
+                        "caption": "Thresholds follow IEEE C57.104 with supporting interpretation ideas inspired by IEC 60599.",
                     }
                 ],
             },
@@ -1323,6 +1460,86 @@ def build_criteria_index(tests: List[Dict]) -> Dict[str, Dict]:
     return index
 
 
+def is_dga_test(test: Dict) -> bool:
+    return test.get("id") == "transformer_dga"
+
+
+def classify_dga_gas(value: float, gas_meta: Dict) -> Tuple[str, str]:
+    if value <= 0:
+        return "Not entered", "Provide ppm to compare against the Condition 1–4 guideposts."
+
+    cond2 = gas_meta.get("condition_2")
+    cond3 = gas_meta.get("condition_3")
+    cond4 = gas_meta.get("condition_4")
+
+    if cond2 is None or cond3 is None or cond4 is None:
+        return "Info", "Thresholds unavailable for this gas."
+
+    if value < cond2:
+        condition = "Condition 1"
+        action = "Normal aging — continue routine annual sampling."
+    elif value < cond3:
+        condition = "Condition 2"
+        action = f"Elevated trend — increase sampling cadence. {gas_meta.get('insight', '')}".strip()
+    elif value < cond4:
+        condition = "Condition 3"
+        action = (
+            f"Developing {gas_meta.get('faults', 'faults')} signature — coordinate targeted electrical tests."
+        )
+    else:
+        condition = "Condition 4"
+        action = (
+            f"Severe {gas_meta.get('faults', 'fault')} indication — prepare for an outage and deeper diagnostics."
+        )
+
+    return condition, action
+
+
+def render_dga_gas_breakdown(test: Dict, widget_suffix: str, context_label: str) -> None:
+    gas_meta = test.get("gas_thresholds")
+    if not gas_meta:
+        return
+
+    st.markdown(f"#### {context_label}: key-gas interpretation")
+    st.caption(
+        "Enter ppm from your latest oil report to compare with IEEE C57.104-2019 and IEC 60599 guidance."
+    )
+
+    cols = st.columns(3)
+    gas_values: Dict[str, float] = {}
+    for idx, meta in enumerate(gas_meta):
+        col = cols[idx % 3]
+        gas_values[meta["id"]] = col.number_input(
+            f"{meta['gas']} (ppm)",
+            min_value=0.0,
+            value=0.0,
+            key=f"dga_{meta['id']}_{widget_suffix}",
+            step=1.0,
+        )
+
+    if not any(value > 0 for value in gas_values.values()):
+        st.info("Populate at least one gas concentration to see targeted insight.")
+        return
+
+    rows = []
+    for meta in gas_meta:
+        ppm = gas_values.get(meta["id"], 0.0)
+        condition, interpretation = classify_dga_gas(ppm, meta)
+        rows.append(
+            {
+                "Gas": meta["gas"],
+                "ppm": f"{ppm:.1f}",
+                "Condition": condition,
+                "What it suggests": interpretation or meta.get("faults", ""),
+            }
+        )
+
+    st.dataframe(pd.DataFrame(rows), use_container_width=True)
+    st.caption(
+        "Thresholds paraphrased from IEEE C57.104-2019 and IEC 60599 so readers can trace the original sources."
+    )
+
+
 def evaluate_measurement(
     value: float,
     criterion: Dict,
@@ -1509,6 +1726,13 @@ def render_pass_fail_calculator(index: Dict[str, Dict]) -> None:
     if meaning:
         st.info(f"What this result means: {meaning}")
 
+    if is_dga_test(test):
+        render_dga_gas_breakdown(
+            test,
+            widget_suffix=f"calculator_{criterion['id']}",
+            context_label="Calculator",
+        )
+
     if voltage_context:
         st.caption(
             "Megohm readings are only comparable when the DC stress follows ANSI/NETA guidance. "
@@ -1628,6 +1852,13 @@ def render_result_explorer(index: Dict[str, Dict]) -> None:
     if meaning:
         st.info(
             f"Latest classification ({statuses[-1]}): {meaning}"
+        )
+
+    if is_dga_test(test):
+        render_dga_gas_breakdown(
+            test,
+            widget_suffix=f"explorer_{criterion['id']}",
+            context_label="Result explorer",
         )
 
     if voltage_context:
