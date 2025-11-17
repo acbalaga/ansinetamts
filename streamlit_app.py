@@ -54,6 +54,16 @@ def _build_test_library() -> List[Dict]:
                 "investigate": "Staining, insulation cracks, bent buswork, or missing bolting hardware.",
                 "fail": "Active oil leaks, structural damage, or compromised barriers.",
             },
+            "result_implications": {
+                "Review": (
+                    "Document every deficiency and correct or defer it with engineering approval before any energized testing "
+                    "because visual issues often foreshadow electrical failures."
+                ),
+                "default": (
+                    "Use the inspection findings to prioritize mechanical repairs that remove safety hazards and contamination "
+                    "pathways before energizing equipment."
+                ),
+            },
         },
         {
             "id": "insulation_resistance",
@@ -74,6 +84,14 @@ def _build_test_library() -> List[Dict]:
                 "Demagnetize large machines or windings after testing.",
             ],
             "interpretation": "ANSI/NETA focuses on trending: stable or increasing values are acceptable while decreasing results trigger investigation.",
+            "kv_recommendations": [
+                {"max_rating_kv": 1.0, "dc_test_kv": 1.0, "example": "Control wiring, LV motors"},
+                {"max_rating_kv": 5.0, "dc_test_kv": 2.5, "example": "1–5 kV cables"},
+                {"max_rating_kv": 15.0, "dc_test_kv": 5.0, "example": "5–15 kV switchgear"},
+                {"max_rating_kv": 34.5, "dc_test_kv": 10.0, "example": "Collector feeders"},
+                {"max_rating_kv": 69.0, "dc_test_kv": 15.0, "example": "GSU tertiary"},
+                {"max_rating_kv": 138.0, "dc_test_kv": 25.0, "example": "HV transmission windings"},
+            ],
             "criteria": [
                 {
                     "id": "ir_mv_cable",
@@ -95,11 +113,36 @@ def _build_test_library() -> List[Dict]:
                     "investigate_below": 3.0,
                     "note": "PI < 2 suggests moisture/contamination for Class F or better insulation systems.",
                 },
+                {
+                    "id": "ir_switchgear_bus",
+                    "label": "Metal-clad switchgear bus (5–15 kV)",
+                    "parameter": "Resistance",
+                    "unit": "MΩ",
+                    "evaluation_type": "absolute",
+                    "minimum": 200,
+                    "investigate_below": 400,
+                    "note": "Values <200 MΩ usually fail maintenance criteria; 200–400 MΩ needs cleaning/drying before energizing.",
+                },
+                {
+                    "id": "ir_gsu_winding",
+                    "label": "GSU HV winding to ground",
+                    "parameter": "Resistance",
+                    "unit": "MΩ",
+                    "evaluation_type": "absolute",
+                    "minimum": 1000,
+                    "investigate_below": 1500,
+                    "note": "Healthy generator step-up windings trend in the multi-gigaohm range; <1 GΩ indicates wet paper or carbon tracking.",
+                },
             ],
             "diagnostics": {
                 "watch": "Gradual decline in PI or IR yet still above acceptance — schedule retest.",
                 "investigate": "Drop of >25% from baseline or absolute IR < investigate threshold.",
                 "fail": "IR below minimum or unstable readings that never stabilize.",
+            },
+            "result_implications": {
+                "Pass": "High megohm values indicate the solid insulation is dry and contaminants are not providing parallel leakage paths.",
+                "Investigate": "Borderline resistance often points to moisture absorption, carbonized surfaces, or lead dress issues that require cleaning or re-drying before energizing.",
+                "Fail": "A failed megohm test signifies insulation breakdown — energizing risks flashover, so keep the asset de-energized until insulation is repaired and re-tested.",
             },
         },
         {
@@ -143,6 +186,11 @@ def _build_test_library() -> List[Dict]:
                 "investigate": "Any single joint drifting upward more than 20 µΩ per maintenance cycle.",
                 "fail": "Contacts exceeding published limits even after maintenance.",
             },
+            "result_implications": {
+                "Pass": "Uniform micro-ohm readings confirm bolted joints and breaker contacts are tight enough to avoid localized heating during peak output.",
+                "Investigate": "Elevated resistance usually means oxide buildup or insufficient torque — clean, re-torque, and remeasure before returning to service.",
+                "Fail": "High contact resistance will overheat and can trigger arcing, so keep the equipment de-energized until the joint or breaker is refurbished.",
+            },
         },
         {
             "id": "power_factor",
@@ -184,6 +232,11 @@ def _build_test_library() -> List[Dict]:
                 "watch": "Stable but elevated PF with no change year-over-year.",
                 "investigate": "Sudden 10% relative jump versus prior season.",
                 "fail": "PF beyond absolute limits or trending upward every cycle despite maintenance.",
+            },
+            "result_implications": {
+                "Pass": "Low dielectric loss confirms the insulation is dry and capacitive currents are within ANSI/NETA expectations.",
+                "Investigate": "Rising losses often precede insulation breakdown — plan oil processing, drying, or more frequent monitoring before energizing at full voltage.",
+                "Fail": "High power factor indicates active insulation deterioration, so keep the asset out of service until the root cause (moisture, contamination, aging) is corrected.",
             },
         },
         {
@@ -227,6 +280,11 @@ def _build_test_library() -> List[Dict]:
                 "investigate": "Any drift correlated with lubricant age or counter readings.",
                 "fail": "Out-of-tolerance timing or poles not completing travel.",
             },
+            "result_implications": {
+                "Pass": "Mechanism speeds are fast enough to interrupt PV collector faults within the modeled coordination times.",
+                "Investigate": "Approaching the limit often signals weak springs or sticky linkages — service the operator before relying on it for high-current clearing.",
+                "Fail": "Slow or unsynchronized poles cannot clear faults safely and risk equipment damage, so remove the breaker from service until rebuilt.",
+            },
         },
         {
             "id": "transformer_ttr",
@@ -269,6 +327,11 @@ def _build_test_library() -> List[Dict]:
                 "investigate": "Ratios drifting on multiple phases after transport or repairs.",
                 "fail": "Any ratio or phase shift outside ANSI/NETA tolerance.",
             },
+            "result_implications": {
+                "Pass": "Measured ratios align with nameplate values so inverters will deliver grid-compliant voltage.",
+                "Investigate": "Minor deviation can stem from tap-changer misalignment or loosened leads — correct and retest before energizing.",
+                "Fail": "Significant ratio or vector errors indicate winding damage or misconnections that would create unacceptable voltage and circulating currents, so keep the transformer offline.",
+            },
         },
         {
             "id": "winding_resistance",
@@ -301,6 +364,11 @@ def _build_test_library() -> List[Dict]:
                 "investigate": "Phase-to-phase imbalance greater than 5% even after temperature correction.",
                 "fail": "Deviation above 10% or unstable readings that never settle.",
             },
+            "result_implications": {
+                "Pass": "Balanced DC ohms confirm winding joints, leads, and LTC contacts are intact so load current will share evenly.",
+                "Investigate": "Increasing imbalance suggests carbon on tap-changer contacts or loose brazed joints — correct the mechanical issue before loading the transformer.",
+                "Fail": "Large deviations or opens show a compromised winding path that will overheat immediately; keep the transformer de-energized until repaired and retested.",
+            },
         },
         {
             "id": "transformer_dga",
@@ -332,6 +400,11 @@ def _build_test_library() -> List[Dict]:
                 "watch": "TDCG trending upward but still <1800 ppm.",
                 "investigate": "Level 3 condition (3600–7200 ppm) or rapid gas growth.",
                 "fail": "Level 4 gas concentration or confirmed arcing signature.",
+            },
+            "result_implications": {
+                "Pass": "Gas levels align with normal aging so the transformer can stay in service with routine monitoring.",
+                "Investigate": "Elevated TDCG or accelerating key-gas growth implies developing faults — increase sampling and plan targeted electrical tests before peak season.",
+                "Fail": "Condition 4 concentrations indicate an active fault; schedule an outage immediately to avoid catastrophic failure.",
             },
         },
         {
@@ -375,6 +448,11 @@ def _build_test_library() -> List[Dict]:
                 "investigate": "Trip times creeping toward coordination margins on feeder breakers feeding large PV blocks.",
                 "fail": "Breaker fails to trip or exceeds the published tolerance.",
             },
+            "result_implications": {
+                "Pass": "Protection elements respond within tolerance so PV feeder faults will clear where intended.",
+                "Investigate": "Out-of-band pickup or timing usually signals misadjusted relays or mechanical drag — correct settings and re-test before energizing the feeder.",
+                "Fail": "A breaker that cannot interrupt current or trips late endangers upstream equipment; keep it tagged out until repaired or replaced.",
+            },
         },
         {
             "id": "switchgear_hipot",
@@ -407,6 +485,11 @@ def _build_test_library() -> List[Dict]:
                 "investigate": "Surface tracking, audible discharge, or inability to reach full voltage.",
                 "fail": "Flashover, collapse of voltage, or leakage exceeding manufacturer limit.",
             },
+            "result_implications": {
+                "Pass": "The gear can withstand rated overvoltages, indicating bus insulation is clean and intact.",
+                "Investigate": "Higher leakage or audible partial discharge suggests contamination or voids — clean, dry, and reinspect before energizing.",
+                "Fail": "Dielectric breakdown proves the insulation will not survive service stress; repair or replace the cell before re-energizing.",
+            },
         },
     ]
 
@@ -422,6 +505,87 @@ def _stable_seed(*parts: str) -> int:
 def _suggest_seed_values(criterion: Dict) -> List[float]:
     values, _ = simulate_measurements(criterion, scenario="Healthy", count=3)
     return values
+
+
+IR_DEFAULT_RATING_KV = 34.5
+
+
+def recommend_dc_test_voltage(
+    nameplate_kv: float, table: List[Dict[str, float]]
+) -> float:
+    """Return the suggested megohmmeter voltage based on ANSI/NETA-style tables."""
+    if not table:
+        return 0.0
+    for row in table:
+        if nameplate_kv <= row["max_rating_kv"]:
+            return row["dc_test_kv"]
+    return table[-1]["dc_test_kv"]
+
+
+def describe_test_voltage_application(
+    applied_kv: float, recommended_kv: float
+) -> Tuple[str, str]:
+    """Return (severity, message) describing adequacy of applied DC voltage."""
+    if recommended_kv <= 0:
+        return "info", "Enter a nameplate voltage to receive test-stress guidance."
+
+    if applied_kv < 0.85 * recommended_kv:
+        return (
+            "warning",
+            "Applied DC voltage is significantly below the typical ANSI/NETA recommendation — megohm readings may appear artificially high.",
+        )
+    if applied_kv > 1.2 * recommended_kv:
+        return (
+            "warning",
+            "Applied DC voltage exceeds the usual stress level. Confirm the insulation system is rated for this voltage to avoid overstressing aged assets.",
+        )
+    return (
+        "info",
+        "Test voltage aligns with ANSI/NETA guidance, so resistance values represent a valid stress level.",
+    )
+
+
+def describe_result_meaning(status: str, test: Dict) -> Optional[str]:
+    mapping = test.get("result_implications") or {}
+    return mapping.get(status) or mapping.get("default")
+
+
+def render_voltage_context(test: Dict, widget_suffix: str) -> Optional[Dict[str, float]]:
+    table = test.get("kv_recommendations")
+    if not table:
+        return None
+
+    st.markdown("**Test voltage context**")
+    col_rating, col_applied = st.columns(2)
+    default_rating = min(IR_DEFAULT_RATING_KV, table[-1]["max_rating_kv"])
+    nameplate = col_rating.number_input(
+        "Equipment nameplate voltage (kV line-line)",
+        min_value=0.1,
+        value=float(default_rating),
+        step=0.1,
+        key=f"rating_{widget_suffix}",
+    )
+    recommended = recommend_dc_test_voltage(nameplate, table)
+    col_rating.caption(f"Suggested ANSI/NETA DC test voltage: {recommended:.1f} kV")
+
+    default_applied = recommended or table[0]["dc_test_kv"]
+    applied = col_applied.number_input(
+        "Applied DC test voltage (kV)",
+        min_value=0.1,
+        value=float(default_applied),
+        step=0.1,
+        key=f"applied_{widget_suffix}",
+    )
+
+    severity, message = describe_test_voltage_application(applied, recommended)
+    renderer = {"warning": st.warning, "info": st.info}.get(severity, st.info)
+    renderer(message)
+
+    return {
+        "nameplate_kv": nameplate,
+        "recommended_kv": recommended,
+        "applied_kv": applied,
+    }
 
 
 def simulate_measurements(
@@ -641,6 +805,16 @@ def render_learning_card(test: Dict) -> None:
         st.markdown("\n".join(f"- {step}" for step in test["procedure"]))
         st.markdown("**Result interpretation**")
         st.write(test["interpretation"])
+        if test.get("kv_recommendations"):
+            st.markdown("**Typical megohmmeter DC test selection**")
+            kv_df = pd.DataFrame(test["kv_recommendations"]).rename(
+                columns={
+                    "max_rating_kv": "Nameplate ≤ kV",
+                    "dc_test_kv": "Suggested DC test kV",
+                    "example": "Typical asset",
+                }
+            )
+            st.table(kv_df)
     with cols[1]:
         st.markdown("**Phases**")
         st.write(", ".join(test["phases"]))
@@ -658,6 +832,10 @@ def render_learning_card(test: Dict) -> None:
                 st.write(
                     f"- {criterion['label']}: {criterion.get('note', 'Refer to calculator guidance for evaluation details.')}"
                 )
+        if test.get("result_implications"):
+            st.markdown("**What the outcomes mean**")
+            for status, meaning in test["result_implications"].items():
+                st.write(f"{status}: {meaning}")
 
 
 def render_learning_library(tests: List[Dict]) -> None:
@@ -697,7 +875,14 @@ def render_pass_fail_calculator(index: Dict[str, Dict]) -> None:
         options=[crit_id for _, crit_id in test_options],
         format_func=lambda crit_id: f"{index[crit_id]['test']['name']} — {index[crit_id]['criterion']['label']}",
     )
+    test = index[test_label]["test"]
     criterion = index[test_label]["criterion"]
+
+    voltage_context = None
+    if test.get("kv_recommendations"):
+        voltage_context = render_voltage_context(
+            test, widget_suffix=f"calculator_{criterion['id']}"
+        )
 
     col1, col2 = st.columns(2)
     measured_value = col1.number_input(
@@ -734,6 +919,16 @@ def render_pass_fail_calculator(index: Dict[str, Dict]) -> None:
         unsafe_allow_html=True,
     )
 
+    meaning = describe_result_meaning(result["status"], test)
+    if meaning:
+        st.info(f"What this result means: {meaning}")
+
+    if voltage_context:
+        st.caption(
+            "Megohm readings are only comparable when the DC stress follows ANSI/NETA guidance. "
+            "Use the voltage context inputs above to document the applied stress."
+        )
+
 
 def render_result_explorer(index: Dict[str, Dict]) -> None:
     st.subheader("Result explorer")
@@ -742,7 +937,14 @@ def render_result_explorer(index: Dict[str, Dict]) -> None:
         options=list(index.keys()),
         format_func=lambda crit_id: f"{index[crit_id]['test']['name']} — {index[crit_id]['criterion']['label']}",
     )
+    test = index[selected]["test"]
     criterion = index[selected]["criterion"]
+
+    voltage_context = None
+    if test.get("kv_recommendations"):
+        voltage_context = render_voltage_context(
+            test, widget_suffix=f"explorer_{criterion['id']}"
+        )
 
     data_mode = st.radio(
         "Data source",
@@ -835,6 +1037,17 @@ def render_result_explorer(index: Dict[str, Dict]) -> None:
     )
     renderer = {"error": st.error, "warning": st.warning, "success": st.success}[severity]
     renderer(summary)
+
+    meaning = describe_result_meaning(statuses[-1], test)
+    if meaning:
+        st.info(
+            f"Latest classification ({statuses[-1]}): {meaning}"
+        )
+
+    if voltage_context:
+        st.caption(
+            "Documenting the applied DC test voltage helps correlate insulation resistance trends year-over-year."
+        )
 
 
 def main() -> None:

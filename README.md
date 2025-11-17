@@ -8,11 +8,19 @@ This repository hosts a Streamlit application that provides an interactive, educ
 - Interactive calculator that classifies entered field results as **Pass**, **Investigate**, or **Fail** according to rule-of-thumb ranges inspired by ANSI/NETA guidance.
 - Result explorer that plots manual entries or simulated scenarios and surfaces explicit trend/triage summaries so engineers know exactly what to do with the data.
 - Built-in contextual help, references, and caution statements to reinforce safe, standards-based use.
+- Expanded insulation-resistance module with ANSI/NETA-style DC test-voltage tables plus “what it means” explanations so megohm readings translate into actionable maintenance decisions.
+- Every learning card now carries plain-language Pass/Investigate/Fail implications so engineers instantly know the operational risk tied to their calculator result.
 
 ### Simulate measurements before heading to the field
 - Within the **Result Explorer** tab, choose **Simulate scenario** to auto-populate realistic samples (Healthy, Drifting, or Out of tolerance) for any criterion.
 - Review the generated metric, table, and insight banner to understand how marginal data will be classified before you ever step on site.
 - Switch back to **Manual entry** to paste your own test set and confirm whether the resulting insight remains actionable.
+
+### Insulation resistance deep dive
+- Learning cards now display a megohmmeter voltage-selection table that mirrors the ANSI/NETA quick reference, plus the consequences of Pass/Investigate/Fail outcomes.
+- The calculator and result explorer ask for the equipment nameplate kV and applied DC test voltage so you can verify that readings were taken at the proper stress level.
+- Result summaries now include reasoning statements (e.g., “moisture likely present” or “keep the asset de-energized”) to help engineers plan the next field action.
+- The same insight pattern has been extended across transformer, breaker, and switchgear learning cards so the interpretation experience stays consistent regardless of the test family.
 
 ## Running the app
 1. Install the dependencies (ideally inside a virtual environment):
