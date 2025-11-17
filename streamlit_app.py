@@ -650,11 +650,14 @@ def render_learning_card(test: Dict) -> None:
         st.write(f"Fail: {test['diagnostics']['fail']}")
         st.markdown("**Acceptance highlights**")
         for criterion in test["criteria"]:
-            st.write(
-                f"- {criterion['label']}: {criterion.get('minimum', '—')} to {criterion.get('maximum', '—')} {criterion['unit']}"
-                if criterion.get("evaluation_type") == "absolute"
-                else f"- {criterion['label']}: {criterion['note']}"
-            )
+            if criterion.get("evaluation_type") == "absolute":
+                st.write(
+                    f"- {criterion['label']}: {criterion.get('minimum', '—')} to {criterion.get('maximum', '—')} {criterion.get('unit', '')}"
+                )
+            else:
+                st.write(
+                    f"- {criterion['label']}: {criterion.get('note', 'Refer to calculator guidance for evaluation details.')}"
+                )
 
 
 def render_learning_library(tests: List[Dict]) -> None:
