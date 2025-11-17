@@ -10,6 +10,7 @@ This repository hosts a Streamlit application that provides an interactive, educ
 - Built-in contextual help, references, and caution statements to reinforce safe, standards-based use.
 - Expanded insulation-resistance module with ANSI/NETA-style DC test-voltage tables plus “what it means” explanations so megohm readings translate into actionable maintenance decisions.
 - Every learning card now carries plain-language Pass/Investigate/Fail implications so engineers instantly know the operational risk tied to their calculator result.
+- Deep-dive expanders on the most-used solar plant tests (visual inspection, insulation resistance, contact resistance, power factor, breaker diagnostics, transformer health, and switchgear withstand) provide PV-specific quick references, interpretation cues, and remediation playbooks.
 
 ### Simulate measurements before heading to the field
 - Within the **Result Explorer** tab, choose **Simulate scenario** to auto-populate realistic samples (Healthy, Drifting, or Out of tolerance) for any criterion.
@@ -21,6 +22,7 @@ This repository hosts a Streamlit application that provides an interactive, educ
 - The calculator and result explorer ask for the equipment nameplate kV and applied DC test voltage so you can verify that readings were taken at the proper stress level.
 - Result summaries now include reasoning statements (e.g., “moisture likely present” or “keep the asset de-energized”) to help engineers plan the next field action.
 - The same insight pattern has been extended across transformer, breaker, and switchgear learning cards so the interpretation experience stays consistent regardless of the test family.
+- Additional learning-card deep dives outline PV-centric decision clues for contact resistance, power factor, breaker timing/primary injection, transformer ratio/resistance/DGA, and switchgear withstand so users know how to respond when data shifts.
 
 ## Running the app
 1. Install the dependencies (ideally inside a virtual environment):
