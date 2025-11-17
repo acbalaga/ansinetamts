@@ -830,6 +830,16 @@ def _build_test_library() -> List[Dict]:
                     "investigate_above": 350,
                     "note": "CO/CO₂ balance helps gauge cellulose overheating — values paraphrased from IEEE C57.104.",
                 },
+                {
+                    "id": "dga_co2",
+                    "label": "Carbon dioxide (CO₂)",
+                    "parameter": "Concentration",
+                    "unit": "ppm",
+                    "evaluation_type": "absolute",
+                    "maximum": 10000,
+                    "investigate_above": 2500,
+                    "note": "CO₂ combines with CO to gauge paper overheating; limits paraphrased from IEEE C57.104 and IEC 60599.",
+                },
             ],
             "diagnostics": {
                 "watch": "TDCG trending upward but still <1800 ppm.",
@@ -896,6 +906,15 @@ def _build_test_library() -> List[Dict]:
                     "faults": "Cellulose overheating / paper degradation.",
                     "insight": "Review CO/CO₂ ratio trends to separate thermal aging from moisture ingress.",
                 },
+                {
+                    "id": "co2",
+                    "gas": "Carbon dioxide (CO₂)",
+                    "condition_2": 2500,
+                    "condition_3": 4000,
+                    "condition_4": 10000,
+                    "faults": "Long-term cellulose decomposition or wet pressboard.",
+                    "insight": "Use CO₂ alongside CO ratios (per IEEE C57.104/IEC 60599) to judge paper health and moisture ingress.",
+                },
             ],
             "deep_dive": {
                 "title": "Making DGA actionable",
@@ -956,6 +975,7 @@ def _build_test_library() -> List[Dict]:
                             {"Gas": "C₂H₄", "Condition 2": "50 ppm", "Condition 3": "200 ppm", "Condition 4": "350 ppm", "Likely issue": "High-temp hot spots."},
                             {"Gas": "C₂H₂", "Condition 2": "35 ppm", "Condition 3": "50 ppm", "Condition 4": "80 ppm", "Likely issue": "Arcing / tap changer faults."},
                             {"Gas": "CO", "Condition 2": "350 ppm", "Condition 3": "570 ppm", "Condition 4": "1400 ppm", "Likely issue": "Cellulose overheating."},
+                            {"Gas": "CO₂", "Condition 2": "2500 ppm", "Condition 3": "4000 ppm", "Condition 4": "10000 ppm", "Likely issue": "Paper aging / wet insulation."},
                         ],
                         "caption": "Thresholds follow IEEE C57.104 with supporting interpretation ideas inspired by IEC 60599.",
                     }
