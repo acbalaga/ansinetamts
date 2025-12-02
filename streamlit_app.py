@@ -6,6 +6,7 @@ from collections import Counter
 import random
 import re
 from dataclasses import dataclass
+from datetime import date
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -640,6 +641,71 @@ def classify_dga_gas(value: float, gas_meta: Dict) -> Tuple[str, str]:
     return condition, action
 
 
+def classify_tdcg(total_ppm: float) -> Tuple[str, str]:
+    """Classify Total Dissolved Combustible Gas per IEEE C57.104 guideposts.
+
+    The thresholds mirror the educational table in the DGA deep-dive section
+    and are intended as paraphrased cues rather than a replacement for the
+    standard itself.
+    """
+
+    if total_ppm <= 0:
+        return "Not entered", "Provide ppm to summarize the overall condition."
+
+    guideposts = (
+        (720, "Condition 1", "Normal sampling (annually)."),
+        (1920, "Condition 2", "Increase sampling to semiannual and review load history."),
+        (4630, "Condition 3", "Monthly samples, plan outage if growth persists."),
+    )
+
+    for limit, label, action in guideposts:
+        if total_ppm < limit:
+            return label, action
+
+    return "Condition 4", "Immediate engineering review and outage scheduling."
+
+
+def _dga_rate_limits() -> Dict[str, Dict[str, float]]:
+    """Rule-of-thumb rate limits for combustible gases (ppm/day and ppm/month).
+
+    Values are paraphrased from IEEE C57.104/IEC 60599 growth guidance and are
+    meant for training. Fleet-specific limits should replace these placeholders.
+    """
+
+    return {
+        "h2": {"ppm_per_day": 10.0},
+        "ch4": {"ppm_per_day": 7.0},
+        "c2h6": {"ppm_per_day": 3.0},
+        "c2h4": {"ppm_per_day": 10.0},
+        "c2h2": {"ppm_per_day": 3.0},
+        "co": {"ppm_per_day": 20.0},
+        "co2": {"ppm_per_day": 140.0},
+    }
+
+
+def _compute_growth_rates(
+    latest_value: float,
+    latest_date: Optional[date],
+    prior_value: Optional[float],
+    prior_date: Optional[date],
+) -> Tuple[Optional[float], Optional[float], Optional[str]]:
+    """Return ppm/day and ppm/month growth with validation feedback."""
+
+    if prior_value is None or prior_value <= 0:
+        return None, None, "Add a prior sample value to compute the growth rate."
+    if latest_date is None or prior_date is None:
+        return None, None, "Enter both sample dates to estimate ppm/day and ppm/month."
+
+    delta_days = (latest_date - prior_date).days
+    if delta_days <= 0:
+        return None, None, "Latest sample date must be after the prior date."
+
+    change = latest_value - prior_value
+    ppm_per_day = change / delta_days
+    ppm_per_month = ppm_per_day * 30.4
+    return ppm_per_day, ppm_per_month, None
+
+
 def render_dga_gas_breakdown(test: Dict, widget_suffix: str, context_label: str) -> None:
     gas_meta = test.get("gas_thresholds")
     if not gas_meta:
@@ -652,6 +718,12 @@ def render_dga_gas_breakdown(test: Dict, widget_suffix: str, context_label: str)
 
     cols = st.columns(3)
     gas_values: Dict[str, float] = {}
+    latest_dates: Dict[str, Optional[date]] = {}
+    prior_values: Dict[str, float] = {}
+    prior_dates: Dict[str, Optional[date]] = {}
+    extra_samples: Dict[str, List[float]] = {}
+    invalid_tokens: Dict[str, List[str]] = {}
+
     for idx, meta in enumerate(gas_meta):
         col = cols[idx % 3]
         gas_values[meta["id"]] = col.number_input(
@@ -661,14 +733,42 @@ def render_dga_gas_breakdown(test: Dict, widget_suffix: str, context_label: str)
             key=f"dga_{meta['id']}_{widget_suffix}",
             step=1.0,
         )
+        latest_dates[meta["id"]] = col.date_input(
+            "Latest sample date (optional)",
+            value=None,
+            key=f"dga_{meta['id']}_{widget_suffix}_latest_date",
+        )
+        prior_values[meta["id"]] = col.number_input(
+            "Prior sample (ppm)",
+            min_value=0.0,
+            value=0.0,
+            key=f"dga_{meta['id']}_{widget_suffix}_prior_value",
+            step=1.0,
+        )
+        prior_dates[meta["id"]] = col.date_input(
+            "Prior sample date (optional)",
+            value=None,
+            key=f"dga_{meta['id']}_{widget_suffix}_prior_date",
+        )
+        raw_series = col.text_area(
+            "Additional samples (ppm, oldest→newest)",
+            value="",
+            key=f"dga_{meta['id']}_{widget_suffix}_series",
+            help="Comma, space, or line separated values to visualize trends.",
+        )
+        extra_samples[meta["id"]], invalid_tokens[meta["id"]] = parse_measurement_series(
+            raw_series
+        )
 
     if not any(value > 0 for value in gas_values.values()):
         st.info("Populate at least one gas concentration to see targeted insight.")
         return
 
     rows = []
+    total_ppm = 0.0
     for meta in gas_meta:
         ppm = gas_values.get(meta["id"], 0.0)
+        total_ppm += ppm
         condition, interpretation = classify_dga_gas(ppm, meta)
         rows.append(
             {
@@ -679,10 +779,96 @@ def render_dga_gas_breakdown(test: Dict, widget_suffix: str, context_label: str)
             }
         )
 
+    tdcg_condition, tdcg_action = classify_tdcg(total_ppm)
+    st.metric(
+        "Total dissolved combustible gas (TDCG)",
+        f"{total_ppm:.1f} ppm",
+        help="Sum of combustible gases to gauge the overall IEEE C57.104 condition.",
+    )
+
     st.dataframe(pd.DataFrame(rows), use_container_width=True)
     st.caption(
         "Thresholds paraphrased from IEEE C57.104-2019 and IEC 60599 so readers can trace the original sources."
     )
+    st.info(f"TDCG {tdcg_condition}: {tdcg_action}")
+
+    trend_rows = []
+    rate_limits = _dga_rate_limits()
+    for meta in gas_meta:
+        ppm = gas_values.get(meta["id"], 0.0)
+        prior_ppm = prior_values.get(meta["id"], 0.0)
+        ppm_per_day, ppm_per_month, validation_issue = _compute_growth_rates(
+            latest_value=ppm,
+            latest_date=latest_dates.get(meta["id"]),
+            prior_value=prior_ppm,
+            prior_date=prior_dates.get(meta["id"]),
+        )
+
+        if validation_issue and prior_ppm > 0:
+            st.warning(f"{meta['gas']}: {validation_issue}")
+
+        limit_day = rate_limits.get(meta["id"], {}).get("ppm_per_day")
+        exceeds_limit = False
+        flag = ""
+        if ppm_per_day is not None and limit_day is not None:
+            exceeds_limit = ppm_per_day > limit_day
+            if exceeds_limit:
+                flag = (
+                    f"Exceeds illustrative {limit_day:.1f} ppm/day guidepost; increase sampling cadence."
+                )
+
+        trend_rows.append(
+            {
+                "Gas": meta["gas"],
+                "Latest ppm": f"{ppm:.1f}",
+                "Prior ppm": f"{prior_ppm:.1f}" if prior_ppm else "", 
+                "ppm/day": f"{ppm_per_day:.2f}" if ppm_per_day is not None else "",
+                "ppm/month": f"{ppm_per_month:.2f}" if ppm_per_month is not None else "",
+                "Flag": flag,
+            }
+        )
+
+    st.markdown("**Rate of change (if dates provided)**")
+    st.caption(
+        "Rates assume evenly spaced samples between the prior and latest dates. Replace the placeholder growth limits with your fleet values when available."
+    )
+    st.dataframe(pd.DataFrame(trend_rows), use_container_width=True)
+
+    for meta in gas_meta:
+        if invalid_tokens.get(meta["id"]):
+            st.warning(
+                f"{meta['gas']}: Ignored invalid entries: {', '.join(invalid_tokens[meta['id']])}"
+            )
+
+    charts = []
+    for meta in gas_meta:
+        series = []
+        if prior_values.get(meta["id"], 0.0) > 0:
+            series.append(prior_values[meta["id"]])
+        series.extend(extra_samples.get(meta["id"], []))
+        series.append(gas_values.get(meta["id"], 0.0))
+        if len(series) < 2:
+            continue
+
+        dates = None
+        latest_date = latest_dates.get(meta["id"])
+        prior_date = prior_dates.get(meta["id"])
+        if prior_date and latest_date and latest_date > prior_date:
+            dates = pd.date_range(start=prior_date, end=latest_date, periods=len(series))
+
+        chart_df = pd.DataFrame({"ppm": series})
+        if dates is not None:
+            chart_df.index = dates
+        charts.append((meta["gas"], chart_df))
+
+    if charts:
+        st.markdown("**Trend visualization**")
+        st.caption(
+            "Series use provided dates when both are supplied; otherwise sample order is used."
+        )
+        for gas_label, chart_df in charts:
+            st.line_chart(chart_df["ppm"], height=180, use_container_width=True)
+            st.caption(f"{gas_label} trend")
 
 
 def evaluate_measurement(
