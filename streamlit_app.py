@@ -1,13 +1,18 @@
 """Streamlit learning lab for ANSI/NETA MTS 2023."""
 from __future__ import annotations
 
+import json
 from collections import Counter
 import random
 import re
-from typing import Dict, List, Optional, Tuple
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple
 
 import pandas as pd
 import streamlit as st
+
+DEFAULT_TEST_DATA_PATH = Path(__file__).resolve().parent / "data" / "tests.json"
 
 st.set_page_config(
     page_title="ANSI-NETA MTS 2023 Learning Lab",
@@ -16,1176 +21,159 @@ st.set_page_config(
 )
 
 
-def _build_test_library() -> List[Dict]:
-    """Curated reference data for learning cards."""
-    return [
-        {
-            "id": "visual_inspection",
-            "name": "Visual & Mechanical Inspection",
-            "category": "Foundational",
-            "summary": "Systematic inspection that verifies nameplate data, mechanical security, clearances, and safety interlocks before energized tests.",
-            "equipment": [
-                "Switchgear",
-                "Transformers",
-                "Protective relays",
-                "Battery systems",
-            ],
-            "phases": ["Acceptance", "Maintenance"],
-            "purpose": "Detects obvious defects that can invalidate subsequent electrical tests.",
-            "procedure": [
-                "Confirm lockout/tagout and discharge stored energy.",
-                "Inspect insulation surfaces, CT/PT polarities, shutters, and arc barriers.",
-                "Verify bolted connections for torque paint movement or discoloration.",
-                "Document nameplate data, as-left settings, and any deviations.",
-            ],
-            "interpretation": "Findings are qualitative; anything unsafe or not per drawings requires correction before energizing.",
-            "criteria": [
-                {
-                    "id": "visual_no_damage",
-                    "label": "No visible damage or contamination",
-                    "parameter": "Condition",
-                    "unit": "n/a",
-                    "evaluation_type": "qualitative",
-                    "investigate_note": "Any evidence of overheating, tracking, or loose hardware mandates corrective action.",
-                }
-            ],
-            "diagnostics": {
-                "watch": "Minor dust or labeling gaps — clean and update records.",
-                "investigate": "Staining, insulation cracks, bent buswork, or missing bolting hardware.",
-                "fail": "Active oil leaks, structural damage, or compromised barriers.",
-            },
-            "result_implications": {
-                "Review": (
-                    "Document every deficiency and correct or defer it with engineering approval before any energized testing "
-                    "because visual issues often foreshadow electrical failures."
-                ),
-                "default": (
-                    "Use the inspection findings to prioritize mechanical repairs that remove safety hazards and contamination "
-                    "pathways before energizing equipment."
-                ),
-            },
-            "deep_dive": {
-                "title": "Inspection storytelling",
-                "summary": "Visual findings set the tone for the entire outage report. Detailed notes often explain why later electrical tests pass or fail.",
-                "sections": [
-                    {
-                        "title": "What to capture",
-                        "bullets": [
-                            "Torque-paint shifts, rust streaks, or broken seals that hint at loose terminations.",
-                            "Evidence of animals, dust, or water paths that would influence dielectric tests.",
-                            "Nameplate discrepancies — mismatched CT ratios or tap data invalidate downstream analysis.",
-                        ],
-                    },
-                    {
-                        "title": "Why it matters",
-                        "bullets": [
-                            "Every later megohm or hi-pot result is interpreted through the cleanliness and condition observed here.",
-                            "Photos help engineers justify outages or replacements without physically visiting remote solar sites.",
-                        ],
-                    },
-                    {
-                        "title": "If deficiencies persist",
-                        "bullets": [
-                            "Stop electrical testing until the hazard is corrected or risk-assessed.",
-                            "Log interim mitigations (temporary barriers, desiccant, heaters) so future crews know the as-found state.",
-                        ],
-                    },
-                ],
-            },
-        },
-        {
-            "id": "insulation_resistance",
-            "name": "Insulation Resistance (Megohmmeter)",
-            "category": "Dielectric",
-            "summary": "High-resistance measurement that validates the health of solid insulation systems.",
-            "equipment": [
-                "Cables",
-                "Transformers",
-                "Switchgear",
-                "Motors",
-            ],
-            "phases": ["Acceptance", "Maintenance"],
-            "purpose": "Baseline integrity check to detect moisture, contamination, or insulation damage.",
-            "procedure": [
-                "Apply the manufacturer/ANSI recommended DC test voltage for 1 minute.",
-                "Record 1-minute, 10-minute, and polarization index (PI) values.",
-                "Demagnetize large machines or windings after testing.",
-            ],
-            "interpretation": "ANSI/NETA focuses on trending: stable or increasing values are acceptable while decreasing results trigger investigation.",
-            "kv_recommendations": [
-                {"max_rating_kv": 1.0, "dc_test_kv": 1.0, "example": "Control wiring, LV motors"},
-                {"max_rating_kv": 5.0, "dc_test_kv": 2.5, "example": "1–5 kV cables"},
-                {"max_rating_kv": 15.0, "dc_test_kv": 5.0, "example": "5–15 kV switchgear"},
-                {"max_rating_kv": 34.5, "dc_test_kv": 10.0, "example": "Collector feeders"},
-                {"max_rating_kv": 69.0, "dc_test_kv": 15.0, "example": "GSU tertiary"},
-                {"max_rating_kv": 138.0, "dc_test_kv": 25.0, "example": "HV transmission windings"},
-            ],
-            "criteria": [
-                {
-                    "id": "ir_mv_cable",
-                    "label": "MV cable > 5 kV (1-min value)",
-                    "parameter": "Resistance",
-                    "unit": "MΩ",
-                    "evaluation_type": "absolute",
-                    "minimum": 100,
-                    "investigate_below": 200,
-                    "note": "Below 100 MΩ is typically rejected; 100–200 MΩ demands cleaning/drying review.",
-                },
-                {
-                    "id": "ir_motor_pi",
-                    "label": "Rotating machine PI",
-                    "parameter": "PI ratio",
-                    "unit": "ratio",
-                    "evaluation_type": "ratio",
-                    "minimum": 2.0,
-                    "investigate_below": 3.0,
-                    "note": "PI < 2 suggests moisture/contamination for Class F or better insulation systems.",
-                },
-                {
-                    "id": "ir_switchgear_bus",
-                    "label": "Metal-clad switchgear bus (5–15 kV)",
-                    "parameter": "Resistance",
-                    "unit": "MΩ",
-                    "evaluation_type": "absolute",
-                    "minimum": 200,
-                    "investigate_below": 400,
-                    "note": "Values <200 MΩ usually fail maintenance criteria; 200–400 MΩ needs cleaning/drying before energizing.",
-                },
-                {
-                    "id": "ir_gsu_winding",
-                    "label": "GSU HV winding to ground",
-                    "parameter": "Resistance",
-                    "unit": "MΩ",
-                    "evaluation_type": "absolute",
-                    "minimum": 1000,
-                    "investigate_below": 1500,
-                    "note": "Healthy generator step-up windings trend in the multi-gigaohm range; <1 GΩ indicates wet paper or carbon tracking.",
-                },
-            ],
-            "diagnostics": {
-                "watch": "Gradual decline in PI or IR yet still above acceptance — schedule retest.",
-                "investigate": "Drop of >25% from baseline or absolute IR < investigate threshold.",
-                "fail": "IR below minimum or unstable readings that never stabilize.",
-            },
-            "result_implications": {
-                "Pass": "High megohm values indicate the solid insulation is dry and contaminants are not providing parallel leakage paths.",
-                "Investigate": "Borderline resistance often points to moisture absorption, carbonized surfaces, or lead dress issues that require cleaning or re-drying before energizing.",
-                "Fail": "A failed megohm test signifies insulation breakdown — energizing risks flashover, so keep the asset de-energized until insulation is repaired and re-tested.",
-            },
-            "deep_dive": {
-                "title": "Megohmmeter reasoning",
-                "summary": "Insulation resistance is often the first electrical test performed on PV feeders after construction or storms. The values provide both absolute assurance (minimum MΩ) and trending context (percent drop vs. history).",
-                "sections": [
-                    {
-                        "title": "Beyond the 1-minute value",
-                        "bullets": [
-                            "Record 10-minute and polarization-index values so you can separate surface leakage from bulk insulation issues.",
-                            "Correct readings to the same temperature whenever possible; colder days naturally increase MΩ.",
-                            "Document humidity and cleaning steps so future outages can reproduce the setup.",
-                        ],
-                    },
-                    {
-                        "title": "Diagnosing declines",
-                        "bullets": [
-                            "Uniform decline on every phase suggests general contamination or trapped moisture.",
-                            "One phase low often indicates sleeve damage, cable shield cuts, or switchgear lead tracking.",
-                            "Erratic readings that never stabilize imply the test voltage is too low/high or the equipment is still charging/discharging.",
-                        ],
-                    },
-                    {
-                        "title": "If results fail",
-                        "bullets": [
-                            "Do not energize — wipe, dry, or bake the insulation until readings stabilize above the minimum.",
-                            "Consider DC hi-pot or VLF withstand only after insulation resistance recovers; hi-pot on a wet system can cause permanent damage.",
-                            "If the same phase fails repeatedly, inspect terminations and cable routing for mechanical damage.",
-                        ],
-                    },
-                ],
-                "tables": [
-                    {
-                        "title": "PI interpretation guide",
-                        "columns": ["PI ratio", "Interpretation"],
-                        "rows": [
-                            {"PI ratio": ">=2.0", "Interpretation": "Dry, clean insulation — acceptable."},
-                            {"PI ratio": "1.5–2.0", "Interpretation": "Watch condition; schedule cleaning or drying."},
-                            {"PI ratio": "<1.5", "Interpretation": "Investigate immediately; moisture or contamination likely."},
-                        ],
-                    }
-                ],
-            },
-        },
-        {
-            "id": "contact_resistance",
-            "name": "Contact Resistance (Micro-ohm)",
-            "category": "Conductor Integrity",
-            "summary": "Low-resistance measurement across bolted or moving current-carrying joints to verify cleanliness and pressure.",
-            "equipment": ["Switchgear", "Bus duct", "Circuit breakers"],
-            "phases": ["Acceptance", "Maintenance"],
-            "purpose": "Identifies loose connections that create heating or unequal current sharing.",
-            "procedure": [
-                "Inject ≥100 A DC using a DLRO across each phase joint.",
-                "Compare readings phase-to-phase and against manufacturer baseline.",
-                "Record ambient temperature for trending adjustments.",
-            ],
-            "interpretation": "Consistency is critical; ANSI/NETA highlights a 50% maximum spread between phases or 50 µΩ absolute limit for many bus joints.",
-            "criteria": [
-                {
-                    "id": "cr_switchgear",
-                    "label": "Metal-clad switchgear main bus",
-                    "parameter": "Resistance",
-                    "unit": "µΩ",
-                    "evaluation_type": "absolute",
-                    "maximum": 100,
-                    "investigate_above": 75,
-                    "note": "Readings >100 µΩ typically fail; >75 µΩ suggests re-torque/cleaning.",
-                },
-                {
-                    "id": "cr_pct_delta",
-                    "label": "Phase balance delta",
-                    "parameter": "Percent deviation",
-                    "unit": "%",
-                    "evaluation_type": "percentage_change",
-                    "maximum": 50,
-                    "investigate_above": 30,
-                    "note": "More than 50% deviation from the average indicates unacceptable imbalance.",
-                },
-            ],
-            "diagnostics": {
-                "watch": "Slight imbalance that repeats between outages.",
-                "investigate": "Any single joint drifting upward more than 20 µΩ per maintenance cycle.",
-                "fail": "Contacts exceeding published limits even after maintenance.",
-            },
-            "result_implications": {
-                "Pass": "Uniform micro-ohm readings confirm bolted joints and breaker contacts are tight enough to avoid localized heating during peak output.",
-                "Investigate": "Elevated resistance usually means oxide buildup or insufficient torque — clean, re-torque, and remeasure before returning to service.",
-                "Fail": "High contact resistance will overheat and can trigger arcing, so keep the equipment de-energized until the joint or breaker is refurbished.",
-            },
-            "deep_dive": {
-                "title": "Micro-ohm decision support",
-                "summary": "Contact resistance translates directly into I²R heating. Solar collector gear often carries its highest current at sunrise ramp-up, so even mild increases can overheat breaker fingers before protective relays ever sense an issue.",
-                "sections": [
-                    {
-                        "title": "Where PV engineers lean on this check",
-                        "bullets": [
-                            "Verifying that collector switchgear splices stayed tight after thermal cycling.",
-                            "Confirming shop work on breaker finger clusters before returning the feeder to service.",
-                            "Establishing a trending baseline immediately after major retrofits or retrofills.",
-                        ],
-                    },
-                    {
-                        "title": "Clues hidden in the numbers",
-                        "bullets": [
-                            "Phase imbalance typically points to one pole with binding linkage or worn fingers.",
-                            "Across-the-board increases usually indicate contamination or insufficient test current.",
-                            "Rapid rise after torqueing suggests plated surfaces were damaged and now arc at lower current.",
-                        ],
-                    },
-                    {
-                        "title": "If the test fails",
-                        "bullets": [
-                            "Plan an infrared scan after repairs to confirm temperature rise recovered.",
-                            "Review maintenance logs for torque tool calibration and spring pressure settings.",
-                            "Escalate to the OEM if values stay erratic after cleaning because finger plating may be worn through.",
-                        ],
-                    },
-                ],
-                "tables": [
-                    {
-                        "title": "PV equipment quick reference",
-                        "columns": [
-                            "Asset",
-                            "Pass band",
-                            "Investigate",
-                            "Likely failure effect",
-                        ],
-                        "rows": [
-                            {
-                                "Asset": "15 kV feeder breaker main contacts",
-                                "Pass band": "<60 µΩ",
-                                "Investigate": "60–90 µΩ",
-                                "Likely failure effect": "Spring relaxation creates delayed clearing and nuisance trips.",
-                            },
-                            {
-                                "Asset": "Collector bus splice / stab",
-                                "Pass band": "<75 µΩ",
-                                "Investigate": "75–100 µΩ",
-                                "Likely failure effect": "Localized bus heating that derates feeder ampacity.",
-                            },
-                            {
-                                "Asset": "GSU HV bushing jumpers",
-                                "Pass band": "<40 µΩ",
-                                "Investigate": "40–60 µΩ",
-                                "Likely failure effect": "Gas generation in the bushing lead pocket due to high I²R losses.",
-                            },
-                        ],
-                        "caption": "Use the table as a discussion starter — always overlay manufacturer tolerances and conductor size.",
-                    }
-                ],
-                "callouts": [
-                    {
-                        "style": "warning",
-                        "text": "Do not re-energize a feeder if micro-ohm readings fail and you cannot re-create test current equal to service current; the joint may still run hot under full load.",
-                    }
-                ],
-            },
-        },
-        {
-            "id": "power_factor",
-            "name": "Insulation Power Factor / Tan Delta",
-            "category": "Dielectric",
-            "summary": "AC loss measurement expressing watts lost versus volt-amperes applied across insulation.",
-            "equipment": ["Transformers", "Bushings", "Rotating machines"],
-            "phases": ["Acceptance", "Maintenance"],
-            "purpose": "Highlights insulation aging, contamination, or moisture ingress.",
-            "procedure": [
-                "Energize winding or component using a power-factor test set at line frequency.",
-                "Record hot-corrected (CH) and 10-kV readings when applicable.",
-                "Compare to nameplate limits or previous test seasons.",
-            ],
-            "interpretation": "ANSI/NETA publishes maximum percent power-factor/tan-delta per equipment class.",
-            "criteria": [
-                {
-                    "id": "pf_transformer",
-                    "label": "Transformer CH power factor",
-                    "parameter": "Percent",
-                    "unit": "%",
-                    "evaluation_type": "absolute",
-                    "maximum": 1.0,
-                    "investigate_above": 0.5,
-                    "note": "Values between 0.5–1.0% prompt drying review; >1.0% is typically rejected for new equipment.",
-                },
-                {
-                    "id": "pf_bushing",
-                    "label": "Bushing PF change",
-                    "parameter": "Percent change",
-                    "unit": "%",
-                    "evaluation_type": "percentage_change",
-                    "maximum": 50,
-                    "investigate_above": 25,
-                    "note": "Change >50% from nameplate/certified value fails.",
-                },
-            ],
-            "diagnostics": {
-                "watch": "Stable but elevated PF with no change year-over-year.",
-                "investigate": "Sudden 10% relative jump versus prior season.",
-                "fail": "PF beyond absolute limits or trending upward every cycle despite maintenance.",
-            },
-            "result_implications": {
-                "Pass": "Low dielectric loss confirms the insulation is dry and capacitive currents are within ANSI/NETA expectations.",
-                "Investigate": "Rising losses often precede insulation breakdown — plan oil processing, drying, or more frequent monitoring before energizing at full voltage.",
-                "Fail": "High power factor indicates active insulation deterioration, so keep the asset out of service until the root cause (moisture, contamination, aging) is corrected.",
-            },
-            "deep_dive": {
-                "title": "Interpreting dielectric losses",
-                "summary": "Power-factor results let you distinguish between a one-off contamination issue and systemic insulation aging. Solar plants lean on these readings to predict whether a transformer can ride through another summer at full output.",
-                "sections": [
-                    {
-                        "title": "Data points engineers document",
-                        "bullets": [
-                            "Hot-corrected (CH) values so results are temperature comparable.",
-                            "10-kV test stress data for bushings that see transmission-level voltages.",
-                            "Percent change versus factory or last outage, especially for bushings installed on PV collection busses.",
-                        ],
-                    },
-                    {
-                        "title": "Interpreting marginal data",
-                        "bullets": [
-                            "Slight PF rise with stable capacitance hints at moisture that can often be addressed by oil processing.",
-                            "Simultaneous PF and capacitance increases suggest insulation swelling or electrode movement.",
-                            "Erratic PF from one bushing usually aligns with gasket leaks or oil level issues.",
-                        ],
-                    },
-                    {
-                        "title": "Failure meaning for PV fleets",
-                        "bullets": [
-                            "Expect higher hot-spot temperatures and accelerated cellulose aging if PF stays elevated.",
-                            "Grid codes can be violated if tertiary bushings absorb too much loss and shift tap-changer regulation.",
-                            "Utilities may refuse synchronization if acceptance PF limits are missed, delaying commissioning.",
-                        ],
-                    },
-                ],
-                "tables": [
-                    {
-                        "title": "Quick reference — typical PF targets",
-                        "columns": ["Asset", "Pass band", "Investigate", "Action if failed"],
-                        "rows": [
-                            {
-                                "Asset": "GSU transformer CH",
-                                "Pass band": "≤0.5%",
-                                "Investigate": "0.5–1.0%",
-                                "Action if failed": "Plan hot-oil circulation or dry-out before peak ambient season.",
-                            },
-                            {
-                                "Asset": "69 kV bushing",
-                                "Pass band": "Change <10%",
-                                "Investigate": "10–25%",
-                                "Action if failed": "Schedule replacement — failure risks a bus fault.",
-                            },
-                            {
-                                "Asset": "Dry-type station service xfmr",
-                                "Pass band": "≤1.5%",
-                                "Investigate": "1.5–2.5%",
-                                "Action if failed": "Inspect for contamination or loose wedges before returning service power.",
-                            },
-                        ],
-                    }
-                ],
-                "callouts": [
-                    {
-                        "style": "info",
-                        "text": "Pair PF readings with oil quality or megohmmeter tests to confirm whether the issue is surface contamination or deep insulation damage.",
-                    }
-                ],
-            },
-        },
-        {
-            "id": "breaker_timing",
-            "name": "Circuit Breaker Timing & Motion",
-            "category": "Protection",
-            "summary": "Measures opening/closing speed and pole synchronism for medium-voltage circuit breakers.",
-            "equipment": ["MV circuit breakers"],
-            "phases": ["Acceptance", "Maintenance"],
-            "purpose": "Verifies stored-energy mechanisms operate fast enough to clear faults and minimize stress on equipment.",
-            "procedure": [
-                "Connect travel transducers or motion analyzers to each pole.",
-                "Perform close, open, and close-open sequences capturing time stamps.",
-                "Compare results to manufacturer tolerance tables.",
-            ],
-            "interpretation": "ANSI/NETA references manufacturer tolerances; typical medium-voltage air breakers must open within 50–80 ms and poles should be within 2 ms of each other.",
-            "criteria": [
-                {
-                    "id": "cb_open_time",
-                    "label": "Open time",
-                    "parameter": "Milliseconds",
-                    "unit": "ms",
-                    "evaluation_type": "absolute",
-                    "maximum": 80,
-                    "investigate_above": 70,
-                    "note": "Values >80 ms fail; 70–80 ms justify spring/exhaust inspection.",
-                },
-                {
-                    "id": "cb_pole_sync",
-                    "label": "Pole timing difference",
-                    "parameter": "Delta",
-                    "unit": "ms",
-                    "evaluation_type": "absolute",
-                    "maximum": 2,
-                    "investigate_above": 1,
-                    "note": "Poles drifting >2 ms apart can damage equipment and usually fail.",
-                },
-            ],
-            "diagnostics": {
-                "watch": "Slightly slow close time that repeats.",
-                "investigate": "Any drift correlated with lubricant age or counter readings.",
-                "fail": "Out-of-tolerance timing or poles not completing travel.",
-            },
-            "result_implications": {
-                "Pass": "Mechanism speeds are fast enough to interrupt PV collector faults within the modeled coordination times.",
-                "Investigate": "Approaching the limit often signals weak springs or sticky linkages — service the operator before relying on it for high-current clearing.",
-                "Fail": "Slow or unsynchronized poles cannot clear faults safely and risk equipment damage, so remove the breaker from service until rebuilt.",
-            },
-            "deep_dive": {
-                "title": "Timing & motion storytelling",
-                "summary": "Timing traces expose both mechanical wear and relay coordination problems. Reviewing the motion curves helps explain why a breaker chattered, stalled, or bounced during a PV feeder fault.",
-                "sections": [
-                    {
-                        "title": "Pre-test checklist",
-                        "bullets": [
-                            "Document stroke length and latch gap so you can compare after lubrication.",
-                            "Note the operating counter and last maintenance date to correlate with timing shifts.",
-                            "Capture control voltage during the test — weak DC supply often mimics mechanical drag.",
-                        ],
-                    },
-                    {
-                        "title": "Interpreting deviations",
-                        "bullets": [
-                            "Long open time with normal travel often points to dashpot or buffer issues.",
-                            "Fast open but slow close is usually a charged-spring or latching adjustment problem.",
-                            "Pole spread beyond 2 ms stresses transformers due to transient recovery voltage imbalance.",
-                        ],
-                    },
-                    {
-                        "title": "If results fail",
-                        "bullets": [
-                            "Tag the breaker out and coordinate with protection engineers to widen upstream settings until repairs finish.",
-                            "Inspect lubrication charts; hardened grease is the most common culprit on seldom-operated solar breakers.",
-                            "Plan a follow-up motion capture after repairs to prove the mechanism returned to baseline.",
-                        ],
-                    },
-                ],
-                "tables": [
-                    {
-                        "title": "Representative timing tolerances",
-                        "columns": ["Mechanism", "Pass band", "Investigate", "Fail trigger"],
-                        "rows": [
-                            {
-                                "Mechanism": "15 kV vacuum drawout",
-                                "Pass band": "Open ≤60 ms",
-                                "Investigate": "60–70 ms",
-                                "Fail trigger": ">70 ms or pole spread >1.5 ms",
-                            },
-                            {
-                                "Mechanism": "SF₆ dead-tank breaker",
-                                "Pass band": "Open ≤70 ms",
-                                "Investigate": "70–80 ms",
-                                "Fail trigger": ">80 ms or motion not completed",
-                            },
-                            {
-                                "Mechanism": "MV recloser",
-                                "Pass band": "Open ≤45 ms",
-                                "Investigate": "45–55 ms",
-                                "Fail trigger": ">55 ms or asymmetrical travel",
-                            },
-                        ],
-                    }
-                ],
-                "callouts": [
-                    {
-                        "style": "info",
-                        "text": "Overlay timing data on your coordination study — even a 5 ms drift can erase the grading margin you designed between PV feeders and collector mains.",
-                    }
-                ],
-            },
-        },
-        {
-            "id": "transformer_ttr",
-            "name": "Transformer Turns Ratio (TTR)",
-            "category": "Transformer Core",
-            "summary": "Confirms the proper ratio and vector group for generator step-up and station service transformers used in PV plants.",
-            "equipment": ["GSU transformers", "Pad-mount transformers"],
-            "phases": ["Acceptance", "Maintenance"],
-            "purpose": "Avoids energizing a mismatched winding connection that would distort voltage or overload inverters.",
-            "procedure": [
-                "Isolate and ground the transformer, remove surge arresters and PT fuses.",
-                "Apply the TTR test set per winding and record ratio, phase displacement, and excitation current.",
-                "Compare readings phase-by-phase to the certified factory test sheet.",
-            ],
-            "interpretation": "ANSI/NETA tolerances are tight (±0.5%) for new equipment; solar inverters depend on this accuracy to stay within grid codes.",
-            "criteria": [
-                {
-                    "id": "ttr_ratio_dev",
-                    "label": "Ratio deviation from nameplate",
-                    "parameter": "Percent deviation",
-                    "unit": "%",
-                    "evaluation_type": "absolute",
-                    "maximum": 0.5,
-                    "investigate_above": 0.3,
-                    "note": "Deviation above 0.5% typically fails acceptance tests for power transformers.",
-                },
-                {
-                    "id": "ttr_phase_shift",
-                    "label": "Phase shift difference",
-                    "parameter": "Degrees",
-                    "unit": "°",
-                    "evaluation_type": "absolute",
-                    "maximum": 0.5,
-                    "investigate_above": 0.25,
-                    "note": "Unexpected displacement hints at miswired taps or incorrect vector group.",
-                },
-            ],
-            "diagnostics": {
-                "watch": "Slight deviation confined to one tap position.",
-                "investigate": "Ratios drifting on multiple phases after transport or repairs.",
-                "fail": "Any ratio or phase shift outside ANSI/NETA tolerance.",
-            },
-            "result_implications": {
-                "Pass": "Measured ratios align with nameplate values so inverters will deliver grid-compliant voltage.",
-                "Investigate": "Minor deviation can stem from tap-changer misalignment or loosened leads — correct and retest before energizing.",
-                "Fail": "Significant ratio or vector errors indicate winding damage or misconnections that would create unacceptable voltage and circulating currents, so keep the transformer offline.",
-            },
-            "deep_dive": {
-                "title": "Turns-ratio for PV transformers",
-                "summary": "Utility-scale solar transformers often operate at fixed tap positions that are critical for inverter voltage windows. A detailed TTR review verifies not only the magnitude but also the phase displacement the inverter expects.",
-                "sections": [
-                    {
-                        "title": "Before energizing",
-                        "bullets": [
-                            "Confirm LTC and DETC tap indicators agree with the physical position before measuring.",
-                            "Capture the excitation current trend — spikes can warn of shorted turns even if ratio still looks OK.",
-                            "Document phase-angle readings to ensure vector group matches the collector relays.",
-                        ],
-                    },
-                    {
-                        "title": "Reading the results",
-                        "bullets": [
-                            "Uniform deviation on all phases usually points to incorrect tap selection or nameplate mismatch.",
-                            "One-phase deviation suggests damaged leads, LTC contact problems, or loose jumpers.",
-                            "Unexpected phase shift is almost always wiring error between test set and bushings.",
-                        ],
-                    },
-                    {
-                        "title": "If limits are exceeded",
-                        "bullets": [
-                            "Hold energization — incorrect ratio will push inverter voltage outside grid-code tolerance.",
-                            "Re-test after inspecting tap-changer neutral leads and recently repaired windings.",
-                            "Escalate to the manufacturer with your recorded phase-angle diagram to validate the vector group.",
-                        ],
-                    },
-                ],
-                "tables": [
-                    {
-                        "title": "Common PV transformer tolerance cues",
-                        "columns": ["Asset", "Target", "Investigate", "Fail"],
-                        "rows": [
-                            {
-                                "Asset": "GSU (34.5/138 kV)",
-                                "Target": "±0.3%",
-                                "Investigate": "0.3–0.5%",
-                                "Fail": ">0.5%",
-                            },
-                            {
-                                "Asset": "Pad-mount step-up",
-                                "Target": "±0.75%",
-                                "Investigate": "0.75–1.0%",
-                                "Fail": ">1.0%",
-                            },
-                            {
-                                "Asset": "Station service",
-                                "Target": "±1.0%",
-                                "Investigate": "1.0–1.5%",
-                                "Fail": ">1.5%",
-                            },
-                        ],
-                        "caption": "Thresholds assume comparison to certified factory data. Always use the OEM tolerance when available.",
-                    }
-                ],
-            },
-        },
-        {
-            "id": "winding_resistance",
-            "name": "Transformer Winding Resistance",
-            "category": "Transformer Core",
-            "summary": "DC resistance check that validates winding integrity, tap-changer contacts, and soldered joints.",
-            "equipment": ["GSU transformers", "Station service transformers"],
-            "phases": ["Acceptance", "Maintenance"],
-            "purpose": "Detects loose connections that would otherwise overheat when solar generation surges each morning.",
-            "procedure": [
-                "Demagnetize the core, connect a Kelvin bridge, and measure each phase on every tap.",
-                "Record ambient and winding temperatures to correct to the reference temperature.",
-                "Compare each phase against the factory baseline or previous outage.",
-            ],
-            "interpretation": "Percent change from the certified baseline is more important than the absolute ohmic value for large transformers.",
-            "criteria": [
-                {
-                    "id": "wr_pct_dev",
-                    "label": "Percent deviation from baseline",
-                    "parameter": "Percent change",
-                    "unit": "%",
-                    "evaluation_type": "percentage_change",
-                    "maximum": 10,
-                    "investigate_above": 5,
-                    "note": ">10% suggests damaged leads or LTC contacts; schedule outage before peak season.",
-                }
-            ],
-            "diagnostics": {
-                "watch": "Slow drift that correlates with LTC maintenance cycles.",
-                "investigate": "Phase-to-phase imbalance greater than 5% even after temperature correction.",
-                "fail": "Deviation above 10% or unstable readings that never settle.",
-            },
-            "result_implications": {
-                "Pass": "Balanced DC ohms confirm winding joints, leads, and LTC contacts are intact so load current will share evenly.",
-                "Investigate": "Increasing imbalance suggests carbon on tap-changer contacts or loose brazed joints — correct the mechanical issue before loading the transformer.",
-                "Fail": "Large deviations or opens show a compromised winding path that will overheat immediately; keep the transformer de-energized until repaired and retested.",
-            },
-            "deep_dive": {
-                "title": "Temperature-corrected winding resistance",
-                "summary": "Winding resistance is one of the best ways to confirm load tap changer (LTC) condition. PV GSUs tend to sit at one tap for long periods, so contact film issues appear as phase imbalance when the transformer is finally serviced.",
-                "sections": [
-                    {
-                        "title": "Key practices",
-                        "bullets": [
-                            "Always correct readings to the 75 °C reference before comparing to the factory test sheet.",
-                            "Cycle the LTC through each position at least once to remove oxide layers before measuring.",
-                            "Let the core fully demagnetize; residual magnetism can make readings unstable.",
-                        ],
-                    },
-                    {
-                        "title": "Reading subtle cues",
-                        "bullets": [
-                            "One phase high only on raise taps → suspect LTC transition resistor or lead joint.",
-                            "All phases high on the same tap → incorrect winding temperature assumption or loose bolted jumper.",
-                            "Random spikes between measurements → check lead dress and ensure clamps are secure.",
-                        ],
-                    },
-                    {
-                        "title": "When it fails",
-                        "bullets": [
-                            "Defer energization — high resistance introduces unequal flux and hotspot heating.",
-                            "Plan internal inspection of tap-changer contacts and brazed joints before next load cycle.",
-                            "Capture as-found values and temperatures in the work order so trends remain defensible.",
-                        ],
-                    },
-                ],
-                "tables": [
-                    {
-                        "title": "Example resistance drift triggers",
-                        "columns": ["Asset", "Baseline ohms", "Investigate change", "Fail change"],
-                        "rows": [
-                            {
-                                "Asset": "34.5 kV delta winding",
-                                "Baseline ohms": "12 mΩ",
-                                "Investigate change": ">5%",
-                                "Fail change": ">10%",
-                            },
-                            {
-                                "Asset": "138 kV grounded-wye winding",
-                                "Baseline ohms": "85 mΩ",
-                                "Investigate change": ">4%",
-                                "Fail change": ">8%",
-                            },
-                            {
-                                "Asset": "Pad-mount 4.16 kV secondary",
-                                "Baseline ohms": "0.9 mΩ",
-                                "Investigate change": ">7%",
-                                "Fail change": ">12%",
-                            },
-                        ],
-                        "caption": "Percent change limits assume identical temperature correction between readings.",
-                    }
-                ],
-            },
-        },
-        {
-            "id": "transformer_dga",
-            "name": "Transformer Dissolved Gas Analysis",
-            "category": "Insulating Fluids",
-            "summary": "Laboratory test of oil samples to identify incipient faults in GSU transformers and PV collector banks.",
-            "equipment": ["Oil-filled transformers"],
-            "phases": ["Maintenance"],
-            "purpose": "Provides early warning of thermal or electrical defects before a forced outage on the solar plant.",
-            "procedure": [
-                "Pull sealed oil samples using clean syringes following ASTM D923.",
-                "Analyze gases per ASTM D3612 and trend CO, C2H2, C2H4, CH4, and H2.",
-                "Compare total dissolved combustible gas (TDCG) and individual key gases to IEEE C57.104/NETA/IEC 60599 action levels.",
-            ],
-            "interpretation": "Action levels dictate whether to increase sampling frequency, schedule an outage, or remove the unit from service.",
-            "criteria": [
-                {
-                    "id": "dga_tdcg",
-                    "label": "Total dissolved combustible gas",
-                    "parameter": "Concentration",
-                    "unit": "ppm",
-                    "evaluation_type": "absolute",
-                    "maximum": 7200,
-                    "investigate_above": 3600,
-                    "note": ">7200 ppm typically triggers immediate outage planning per IEEE C57.104 Table 2.",
-                },
-                {
-                    "id": "dga_h2",
-                    "label": "Hydrogen (H₂)",
-                    "parameter": "Concentration",
-                    "unit": "ppm",
-                    "evaluation_type": "absolute",
-                    "maximum": 1800,
-                    "investigate_above": 135,
-                    "note": "Hydrogen aligns with partial discharge/corona cues in IEEE C57.104 and IEC 60599.",
-                },
-                {
-                    "id": "dga_ch4",
-                    "label": "Methane (CH₄)",
-                    "parameter": "Concentration",
-                    "unit": "ppm",
-                    "evaluation_type": "absolute",
-                    "maximum": 1000,
-                    "investigate_above": 120,
-                    "note": "Methane typically points to low-temperature faults when it departs from IEEE C57.104 Condition 1.",
-                },
-                {
-                    "id": "dga_c2h6",
-                    "label": "Ethane (C₂H₆)",
-                    "parameter": "Concentration",
-                    "unit": "ppm",
-                    "evaluation_type": "absolute",
-                    "maximum": 150,
-                    "investigate_above": 65,
-                    "note": "IEC 60599 treats ethane as the first sign of localized overheating (oil faults).",
-                },
-                {
-                    "id": "dga_c2h4",
-                    "label": "Ethylene (C₂H₄)",
-                    "parameter": "Concentration",
-                    "unit": "ppm",
-                    "evaluation_type": "absolute",
-                    "maximum": 350,
-                    "investigate_above": 50,
-                    "note": "Ethylene growth above ~50 ppm points to high-temperature faults per IEEE C57.104.",
-                },
-                {
-                    "id": "dga_c2h2",
-                    "label": "Acetylene (C₂H₂)",
-                    "parameter": "Concentration",
-                    "unit": "ppm",
-                    "evaluation_type": "absolute",
-                    "maximum": 80,
-                    "investigate_above": 35,
-                    "note": "Any acetylene rise is a red flag for arcing events in IEEE C57.104 and IEC 60599.",
-                },
-                {
-                    "id": "dga_co",
-                    "label": "Carbon monoxide (CO)",
-                    "parameter": "Concentration",
-                    "unit": "ppm",
-                    "evaluation_type": "absolute",
-                    "maximum": 1400,
-                    "investigate_above": 350,
-                    "note": "CO/CO₂ balance helps gauge cellulose overheating — values paraphrased from IEEE C57.104.",
-                },
-                {
-                    "id": "dga_co2",
-                    "label": "Carbon dioxide (CO₂)",
-                    "parameter": "Concentration",
-                    "unit": "ppm",
-                    "evaluation_type": "absolute",
-                    "maximum": 10000,
-                    "investigate_above": 2500,
-                    "note": "CO₂ combines with CO to gauge paper overheating; limits paraphrased from IEEE C57.104 and IEC 60599.",
-                },
-            ],
-            "diagnostics": {
-                "watch": "TDCG trending upward but still <1800 ppm.",
-                "investigate": "Level 3 condition (3600–7200 ppm) or rapid gas growth.",
-                "fail": "Level 4 gas concentration or confirmed arcing signature.",
-            },
-            "result_implications": {
-                "Pass": "Gas levels align with normal aging so the transformer can stay in service with routine monitoring.",
-                "Investigate": "Elevated TDCG or accelerating key-gas growth implies developing faults — increase sampling and plan targeted electrical tests before peak season.",
-                "Fail": "Condition 4 concentrations indicate an active fault; schedule an outage immediately to avoid catastrophic failure.",
-            },
-            "gas_thresholds": [
-                {
-                    "id": "h2",
-                    "gas": "Hydrogen (H₂)",
-                    "condition_2": 135,
-                    "condition_3": 700,
-                    "condition_4": 1800,
-                    "faults": "Partial discharge / corona inside windings or bushings.",
-                    "insight": "Track after breaker faults or tap-changer work where ionization is expected.",
-                },
-                {
-                    "id": "ch4",
-                    "gas": "Methane (CH₄)",
-                    "condition_2": 120,
-                    "condition_3": 400,
-                    "condition_4": 1000,
-                    "faults": "Low-temperature oil faults (hot spots <300 °C).",
-                    "insight": "Often grows with ethane when oil circulation is impeded.",
-                },
-                {
-                    "id": "c2h6",
-                    "gas": "Ethane (C₂H₆)",
-                    "condition_2": 65,
-                    "condition_3": 100,
-                    "condition_4": 150,
-                    "faults": "Localized overheating of oil and solid insulation.",
-                    "insight": "Pairs with methane when hot spots are transitioning from thermal to electrical faults.",
-                },
-                {
-                    "id": "c2h4",
-                    "gas": "Ethylene (C₂H₄)",
-                    "condition_2": 50,
-                    "condition_3": 200,
-                    "condition_4": 350,
-                    "faults": "High-temperature faults (>500 °C) on windings or leads.",
-                    "insight": "Compare with load/tap-changer activity to see if hot-spot limits are exceeded.",
-                },
-                {
-                    "id": "c2h2",
-                    "gas": "Acetylene (C₂H₂)",
-                    "condition_2": 35,
-                    "condition_3": 50,
-                    "condition_4": 80,
-                    "faults": "Arcing, high-energy discharges, or bad tap selectors.",
-                    "insight": "Even small spikes warrant inspection because arcing is not normal in GSUs.",
-                },
-                {
-                    "id": "co",
-                    "gas": "Carbon monoxide (CO)",
-                    "condition_2": 350,
-                    "condition_3": 570,
-                    "condition_4": 1400,
-                    "faults": "Cellulose overheating / paper degradation.",
-                    "insight": "Review CO/CO₂ ratio trends to separate thermal aging from moisture ingress.",
-                },
-                {
-                    "id": "co2",
-                    "gas": "Carbon dioxide (CO₂)",
-                    "condition_2": 2500,
-                    "condition_3": 4000,
-                    "condition_4": 10000,
-                    "faults": "Long-term cellulose decomposition or wet pressboard.",
-                    "insight": "Use CO₂ alongside CO ratios (per IEEE C57.104/IEC 60599) to judge paper health and moisture ingress.",
-                },
-            ],
-            "deep_dive": {
-                "title": "Making DGA actionable",
-                "summary": "Oil samples are one of the earliest warning tools for PV GSUs because generation is often remote and lightly staffed. Translating raw gas ppm into actions keeps outages planned instead of forced. Key-gas guidance is paraphrased from IEEE C57.104-2019 and IEC 60599 so readers know which standards to consult for contractual limits.",
-                "sections": [
-                    {
-                        "title": "What to trend",
-                        "bullets": [
-                            "Total dissolved combustible gas (TDCG) for overall condition per IEEE C57.104.",
-                            "Key-gas fingerprints (C₂H₂ for arcing, C₂H₄/C₂H₆ for thermal faults, H₂ for corona).",
-                            "Rate of change in ppm/month — rapid growth often matters more than a single value.",
-                        ],
-                    },
-                    {
-                        "title": "Pairing with other tests",
-                        "bullets": [
-                            "Use DGA to prioritize which transformers receive power-factor and sweep-frequency-response testing.",
-                            "Correlate with load history; hot summers often drive CO/CO₂ increases without faults.",
-                            "Check oil quality (moisture, interfacial tension) so you know whether the paper is drying out.",
-                        ],
-                    },
-                    {
-                        "title": "If gas levels enter Condition 3/4",
-                        "bullets": [
-                            "Increase sampling cadence (monthly or weekly depending on severity).",
-                            "Review recent tap operations and breaker faults that may have stressed the transformer.",
-                            "Prepare contingency plans (mobile transformer, curtailment schedule) before mandatory outage is declared.",
-                        ],
-                    },
-                    {
-                        "title": "Tie back to standards",
-                        "bullets": [
-                            "IEEE C57.104 supplies the Condition 1–4 guideposts for TDCG and individual gases.",
-                            "IEC 60599 expands on gas ratios (Duval triangle) if you need to pinpoint fault type.",
-                            "ASTM D3612 describes the test method and reporting units so chain-of-custody stays defensible.",
-                        ],
-                    },
-                ],
-                "tables": [
-                    {
-                        "title": "IEEE C57.104 style guideposts",
-                        "columns": ["Condition", "TDCG (ppm)", "Recommended action"],
-                        "rows": [
-                            {"Condition": "1", "TDCG (ppm)": "<720", "Recommended action": "Normal sampling (annually)."},
-                            {"Condition": "2", "TDCG (ppm)": "720–1920", "Recommended action": "Increase sampling to semiannual and review load history."},
-                            {"Condition": "3", "TDCG (ppm)": "1920–4630", "Recommended action": "Monthly samples, plan outage if growth persists."},
-                            {"Condition": "4", "TDCG (ppm)": ">4630", "Recommended action": "Immediate engineering review and outage scheduling."},
-                        ],
-                        "caption": "Values paraphrased from IEEE C57.104 to reinforce the decision logic without reproducing the standard.",
-                    },
-                    {
-                        "title": "Key-gas cues",
-                        "columns": ["Gas", "Condition 2", "Condition 3", "Condition 4", "Likely issue"],
-                        "rows": [
-                            {"Gas": "H₂", "Condition 2": "135 ppm", "Condition 3": "700 ppm", "Condition 4": "1800 ppm", "Likely issue": "Corona / partial discharge."},
-                            {"Gas": "CH₄", "Condition 2": "120 ppm", "Condition 3": "400 ppm", "Condition 4": "1000 ppm", "Likely issue": "Low-temp thermal faults."},
-                            {"Gas": "C₂H₆", "Condition 2": "65 ppm", "Condition 3": "100 ppm", "Condition 4": "150 ppm", "Likely issue": "Localized overheating."},
-                            {"Gas": "C₂H₄", "Condition 2": "50 ppm", "Condition 3": "200 ppm", "Condition 4": "350 ppm", "Likely issue": "High-temp hot spots."},
-                            {"Gas": "C₂H₂", "Condition 2": "35 ppm", "Condition 3": "50 ppm", "Condition 4": "80 ppm", "Likely issue": "Arcing / tap changer faults."},
-                            {"Gas": "CO", "Condition 2": "350 ppm", "Condition 3": "570 ppm", "Condition 4": "1400 ppm", "Likely issue": "Cellulose overheating."},
-                            {"Gas": "CO₂", "Condition 2": "2500 ppm", "Condition 3": "4000 ppm", "Condition 4": "10000 ppm", "Likely issue": "Paper aging / wet insulation."},
-                        ],
-                        "caption": "Thresholds follow IEEE C57.104 with supporting interpretation ideas inspired by IEC 60599.",
-                    }
-                ],
-            },
-        },
-        {
-            "id": "breaker_primary",
-            "name": "Circuit Breaker Primary Injection",
-            "category": "Protection",
-            "summary": "High-current test that verifies medium-voltage collector breakers trip within their coordination band.",
-            "equipment": ["MV circuit breakers", "PV collector breakers"],
-            "phases": ["Acceptance", "Maintenance"],
-            "purpose": "Ensures faults on PV feeders clear locally without tripping upstream transmission breakers.",
-            "procedure": [
-                "Connect a primary injection set to each pole and inject current to pickup and time-delay points.",
-                "Capture actual trip time, pickup current, and relay target operations.",
-                "Compare against relay settings and manufacturer curves.",
-            ],
-            "interpretation": "Pickup current and operating time must align with the relay's programmed curve to maintain coordination between PV inverters and utility protection.",
-            "criteria": [
-                {
-                    "id": "breaker_pickup_delta",
-                    "label": "Pickup current deviation",
-                    "parameter": "Percent change",
-                    "unit": "%",
-                    "evaluation_type": "percentage_change",
-                    "maximum": 15,
-                    "investigate_above": 10,
-                    "note": "Pickup outside ±15% of the setpoint indicates CT polarity or relay issues.",
-                },
-                {
-                    "id": "breaker_trip_time",
-                    "label": "Trip time (long-delay point)",
-                    "parameter": "Milliseconds",
-                    "unit": "ms",
-                    "evaluation_type": "absolute",
-                    "maximum": 130,
-                    "investigate_above": 110,
-                    "note": "Values slower than programmed curve reduce clearing coordination.",
-                },
-            ],
-            "diagnostics": {
-                "watch": "Minor pickup shift correlated with relay firmware updates.",
-                "investigate": "Trip times creeping toward coordination margins on feeder breakers feeding large PV blocks.",
-                "fail": "Breaker fails to trip or exceeds the published tolerance.",
-            },
-            "result_implications": {
-                "Pass": "Protection elements respond within tolerance so PV feeder faults will clear where intended.",
-                "Investigate": "Out-of-band pickup or timing usually signals misadjusted relays or mechanical drag — correct settings and re-test before energizing the feeder.",
-                "Fail": "A breaker that cannot interrupt current or trips late endangers upstream equipment; keep it tagged out until repaired or replaced.",
-            },
-            "deep_dive": {
-                "title": "Primary injection context",
-                "summary": "Primary injection pulls together CT ratios, relay settings, and breaker mechanics. The test validates the entire protection chain that isolates PV collector faults from the grid.",
-                "sections": [
-                    {
-                        "title": "Checklist before energizing the test set",
-                        "bullets": [
-                            "Verify CT polarity and ratio in the relay — wrong taps skew pickup results.",
-                            "Record actual tap setting (Ir) and time-dial so you can compare the programmed curve to measured timing.",
-                            "Confirm the breaker is fully charged and lubrication cycle is complete so mechanical drag does not add delay.",
-                        ],
-                    },
-                    {
-                        "title": "Reading pickup/timing deltas",
-                        "bullets": [
-                            "Pickup high with normal timing → CT saturation or incorrect ratio selection.",
-                            "Pickup low with slow timing → relay likely mis-programmed or time-dial drifted.",
-                            "Trip but no target → review relay output mapping and test-set wiring.",
-                        ],
-                    },
-                    {
-                        "title": "Response to failures",
-                        "bullets": [
-                            "Leave the breaker out of service until you can align curves; mis-coordination can trip the entire plant.",
-                            "Document actual current and time stamps for your relay engineer to update settings files.",
-                            "Consider double-checking secondary injection if primary results remain inconsistent; CT saturation may be hiding a relay issue.",
-                        ],
-                    },
-                ],
-                "tables": [
-                    {
-                        "title": "Feeder protection guideposts",
-                        "columns": ["Test point", "Pass band", "Investigate", "Notes"],
-                        "rows": [
-                            {
-                                "Test point": "Long-time pickup",
-                                "Pass band": "±5% of setpoint",
-                                "Investigate": "5–10%",
-                                "Notes": "Check CT compensation and relay tap.",
-                            },
-                            {
-                                "Test point": "Instantaneous trip",
-                                "Pass band": "±10% of setpoint",
-                                "Investigate": "10–15%",
-                                "Notes": "CT saturation or poor connections are common causes.",
-                            },
-                            {
-                                "Test point": "Long-time delay",
-                                "Pass band": "Within curve",
-                                "Investigate": "+10 ms",
-                                "Notes": "Lubricate mechanism or verify relay time dial.",
-                            },
-                        ],
-                    }
-                ],
-            },
-        },
-        {
-            "id": "switchgear_hipot",
-            "name": "Switchgear AC Withstand / Hi-Pot",
-            "category": "Switchgear",
-            "summary": "Dielectric test on metal-clad switchgear lineups that house PV inverter feeder breakers.",
-            "equipment": ["Metal-clad switchgear", "Collector switchgear"],
-            "phases": ["Acceptance", "Maintenance"],
-            "purpose": "Demonstrates that primary insulation and bus supports can withstand overvoltages before energizing feeders.",
-            "procedure": [
-                "Remove surge devices, isolate control wiring, and apply the ANSI/NETA recommended AC withstand voltage.",
-                "Hold the test voltage (typically 27 kV for 15 kV-class gear) for 1 minute while monitoring leakage current.",
-                "Document leakage current, audible discharge, and partial discharge observations.",
-            ],
-            "interpretation": "Any puncture or rapid increase in leakage current indicates contaminated insulation that must be addressed before returning solar feeders to service.",
-            "criteria": [
-                {
-                    "id": "switchgear_ac_withstand",
-                    "label": "Applied withstand voltage",
-                    "parameter": "Voltage",
-                    "unit": "kV rms",
-                    "evaluation_type": "absolute",
-                    "minimum": 27,
-                    "investigate_below": 24,
-                    "note": "15 kV-class gear should hold 27 kV for one minute during acceptance tests.",
-                }
-            ],
-            "diagnostics": {
-                "watch": "Slightly rising leakage current that stabilizes before test end.",
-                "investigate": "Surface tracking, audible discharge, or inability to reach full voltage.",
-                "fail": "Flashover, collapse of voltage, or leakage exceeding manufacturer limit.",
-            },
-            "result_implications": {
-                "Pass": "The gear can withstand rated overvoltages, indicating bus insulation is clean and intact.",
-                "Investigate": "Higher leakage or audible partial discharge suggests contamination or voids — clean, dry, and reinspect before energizing.",
-                "Fail": "Dielectric breakdown proves the insulation will not survive service stress; repair or replace the cell before re-energizing.",
-            },
-            "deep_dive": {
-                "title": "Dielectric withstand planning",
-                "summary": "Withstand tests validate the entire metal-clad lineup, not just a single breaker cell. Solar operators rely on the result before closing into freshly cleaned feeders.",
-                "sections": [
-                    {
-                        "title": "Preparation essentials",
-                        "bullets": [
-                            "Remove PT fuses, surge arresters, and MOVs so the stress stays on bus insulation only.",
-                            "Wipe and vacuum each cubicle to remove conductive dust from PV site construction.",
-                            "Provide temporary grounds on adjacent equipment to control capacitive coupling.",
-                        ],
-                    },
-                    {
-                        "title": "What the leakage current tells you",
-                        "bullets": [
-                            "Stable low current → insulation likely dry; use as acceptance baseline.",
-                            "Rising current during the minute → moisture or surface tracking in that section.",
-                            "Sudden collapse of voltage → air gap flashover or loose bus insulation hardware.",
-                        ],
-                    },
-                    {
-                        "title": "Failure response",
-                        "bullets": [
-                            "Keep the lineup grounded until you inspect for carbon tracking and loose insulation blocks.",
-                            "Plan borescope or partial-discharge checks to find voids in epoxy or bus supports.",
-                            "If multiple sections fail, evaluate whether humidity control or space heaters are working.",
-                        ],
-                    },
-                ],
-                "tables": [
-                    {
-                        "title": "Example withstand targets",
-                        "columns": ["Gear rating", "Acceptance stress", "Maintenance stress", "Notes"],
-                        "rows": [
-                            {
-                                "Gear rating": "5 kV class",
-                                "Acceptance stress": "19 kV rms",
-                                "Maintenance stress": "15 kV rms",
-                                "Notes": "Reduce duration if insulation history is unknown.",
-                            },
-                            {
-                                "Gear rating": "15 kV class",
-                                "Acceptance stress": "27 kV rms",
-                                "Maintenance stress": "22 kV rms",
-                                "Notes": "Matches ANSI/NETA Table 100.1 guidance.",
-                            },
-                            {
-                                "Gear rating": "27 kV class",
-                                "Acceptance stress": "50 kV rms",
-                                "Maintenance stress": "40 kV rms",
-                                "Notes": "Used for collector mains tied to 34.5 kV feeders.",
-                            },
-                        ],
-                        "caption": "Stress levels mirror typical ANSI/NETA ranges while omitting proprietary tolerances.",
-                    }
-                ],
-                "callouts": [
-                    {
-                        "style": "warning",
-                        "text": "Always discharge the bus between tests — trapped charge can re-flash, injuring personnel even after the set is turned off.",
-                    }
-                ],
-            },
-        },
-    ]
+@dataclass
+class TestDefinition:
+    """Validate the shape of a single test entry."""
+
+    payload: Dict[str, Any]
+
+    REQUIRED_FIELDS = {
+        "id",
+        "name",
+        "category",
+        "summary",
+        "equipment",
+        "phases",
+        "purpose",
+        "procedure",
+        "interpretation",
+        "criteria",
+        "diagnostics",
+        "result_implications",
+        "deep_dive",
+    }
+    STRING_FIELDS = {"id", "name", "category", "summary", "purpose", "interpretation"}
+    LIST_FIELDS = {"equipment", "phases", "procedure", "criteria"}
+
+    @classmethod
+    def from_dict(cls, payload: Dict[str, Any]) -> "TestDefinition":
+        if not isinstance(payload, dict):
+            raise ValueError("Each test entry must be a mapping of fields.")
+
+        cls._validate_required_fields(payload)
+        cls._validate_criteria(payload["criteria"])
+        cls._validate_deep_dive(payload["deep_dive"])
+        return cls(payload=payload)
+
+    @property
+    def id(self) -> str:
+        return str(self.payload["id"])
+
+    def to_dict(self) -> Dict[str, Any]:
+        return self.payload
+
+    @classmethod
+    def _validate_required_fields(cls, payload: Dict[str, Any]) -> None:
+        missing = cls.REQUIRED_FIELDS - payload.keys()
+        if missing:
+            raise ValueError(f"Missing required test fields: {', '.join(sorted(missing))}")
+
+        for field in cls.STRING_FIELDS:
+            if not isinstance(payload[field], str) or not payload[field].strip():
+                raise ValueError(f"Field '{field}' must be a non-empty string.")
+
+        for field in cls.LIST_FIELDS:
+            if not isinstance(payload[field], list):
+                raise ValueError(f"Field '{field}' must be a list.")
+
+        if not isinstance(payload.get("diagnostics"), dict):
+            raise ValueError("Field 'diagnostics' must be a mapping.")
+        if not isinstance(payload.get("result_implications"), dict):
+            raise ValueError("Field 'result_implications' must be a mapping.")
+        if not isinstance(payload.get("deep_dive"), dict):
+            raise ValueError("Field 'deep_dive' must be a mapping.")
+
+    @classmethod
+    def _validate_criteria(cls, criteria: List[Dict[str, Any]]) -> None:
+        if not criteria:
+            raise ValueError("At least one criterion is required for each test.")
+
+        required_fields = {"id", "label", "parameter", "unit", "evaluation_type"}
+        numeric_fields = {"minimum", "maximum", "investigate_below", "investigate_above"}
+
+        for criterion in criteria:
+            if not isinstance(criterion, dict):
+                raise ValueError("Each criterion must be a mapping.")
+
+            missing = required_fields - criterion.keys()
+            if missing:
+                raise ValueError(f"Criterion missing fields: {', '.join(sorted(missing))}")
+
+            for field in required_fields:
+                if not isinstance(criterion[field], str) or not criterion[field]:
+                    raise ValueError(f"Criterion field '{field}' must be a non-empty string.")
+
+            for field in numeric_fields:
+                if field in criterion and not isinstance(criterion[field], (int, float)):
+                    raise ValueError(
+                        f"Criterion field '{field}' must be numeric when provided."
+                    )
+
+    @classmethod
+    def _validate_deep_dive(cls, deep_dive: Dict[str, Any]) -> None:
+        required_fields = {"title", "summary", "sections"}
+        missing = required_fields - deep_dive.keys()
+        if missing:
+            raise ValueError(f"Deep dive missing fields: {', '.join(sorted(missing))}")
+
+        if not isinstance(deep_dive["title"], str) or not isinstance(
+            deep_dive["summary"], str
+        ):
+            raise ValueError("Deep dive title and summary must be strings.")
+
+        sections = deep_dive["sections"]
+        if not isinstance(sections, list) or not sections:
+            raise ValueError("Deep dive sections must be a non-empty list.")
+
+        for section in sections:
+            if not isinstance(section, dict):
+                raise ValueError("Each deep dive section must be a mapping.")
+            if "title" not in section or "bullets" not in section:
+                raise ValueError("Each deep dive section requires a title and bullets.")
+            if not isinstance(section["title"], str):
+                raise ValueError("Deep dive section titles must be strings.")
+            if not isinstance(section["bullets"], list):
+                raise ValueError("Deep dive section bullets must be a list of strings.")
+            for bullet in section["bullets"]:
+                if not isinstance(bullet, str):
+                    raise ValueError("Deep dive bullets must be strings.")
+
+
+def load_test_library(path: str | Path = DEFAULT_TEST_DATA_PATH) -> List[Dict[str, Any]]:
+    """Load and validate test definitions from structured data files.
+
+    The loader keeps the UI decoupled from the source data. Provide a JSON file
+    that matches the expected structure. YAML is also supported if converted
+    before parsing.
+
+    Example:
+        tests = load_test_library()
+    """
+
+    data_path = Path(path)
+    if not data_path.exists():
+        raise FileNotFoundError(
+            f"Test library file not found at {data_path}. Ensure data/tests.json is present."
+        )
+
+    try:
+        raw_data = json.loads(data_path.read_text())
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"Could not parse test library data: {exc}") from exc
+
+    if not isinstance(raw_data, list):
+        raise ValueError("Test library root must be a list of test definitions.")
+
+    tests: List[Dict[str, Any]] = []
+    seen_ids: set[str] = set()
+    for entry in raw_data:
+        definition = TestDefinition.from_dict(entry)
+        if definition.id in seen_ids:
+            raise ValueError(f"Duplicate test id found: {definition.id}")
+        seen_ids.add(definition.id)
+        tests.append(definition.to_dict())
+
+    return tests
 
 
 def _stable_seed(*parts: str) -> int:
@@ -1888,7 +876,19 @@ def render_result_explorer(index: Dict[str, Dict]) -> None:
 
 
 def main() -> None:
-    tests = _build_test_library()
+    try:
+        tests = load_test_library()
+    except FileNotFoundError as exc:
+        st.error(
+            "Test library data file is missing. Add data/tests.json to continue."
+        )
+        st.info(str(exc))
+        st.stop()
+    except ValueError as exc:
+        st.error("Test library data could not be loaded. Fix the data file and retry.")
+        st.info(str(exc))
+        st.stop()
+
     criteria_index = build_criteria_index(tests)
 
     st.title("ANSI-NETA MTS 2023 Learning Lab")
