@@ -36,4 +36,13 @@ This repository hosts a Streamlit application that provides an interactive, educ
    streamlit run streamlit_app.py
    ```
 
+## Running tests
+
+The repository includes pytest-based unit tests for the calculation helpers that power the result explorer and calculator logic.
+
+```bash
+pip install -r requirements.txt
+pytest
+```
+
 The app is designed strictly for educational use and does not replace the ANSI/NETA MTS 2023 publication. Always refer to the official document for contractual or compliance decisions.
