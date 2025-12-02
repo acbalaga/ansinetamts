@@ -764,6 +764,15 @@ def render_result_explorer(index: Dict[str, Dict]) -> None:
             test, widget_suffix=f"explorer_{criterion['id']}"
         )
 
+    uploaded_file = st.file_uploader(
+        "Upload measurement history (CSV or Excel)",
+        type=("csv", "xlsx"),
+        help=(
+            "Include a numeric column for measurements and an optional timestamp column. "
+            "Uploaded data replaces manual entry and simulation."
+        ),
+    )
+
     data_mode = st.radio(
         "Data source",
         ("Manual entry", "Simulate scenario"),
@@ -813,11 +822,91 @@ def render_result_explorer(index: Dict[str, Dict]) -> None:
                 f"Baseline assumed for percent-change calculations: {baseline:.2f}"
             )
 
+    timestamp_series: Optional[pd.Series] = None
+
+    if uploaded_file:
+        try:
+            if uploaded_file.name.lower().endswith(".csv"):
+                uploaded_df = pd.read_csv(uploaded_file)
+            else:
+                uploaded_df = pd.read_excel(uploaded_file)
+        except (ValueError, FileNotFoundError) as exc:
+            st.error(f"Could not read the uploaded file: {exc}")
+            return
+
+        if uploaded_df.empty:
+            st.error("Uploaded file is empty. Provide at least one row of data.")
+            return
+
+        numeric_columns = [
+            col for col in uploaded_df.columns if pd.api.types.is_numeric_dtype(uploaded_df[col])
+        ]
+        if not numeric_columns:
+            st.error(
+                "No numeric columns found. Ensure the file includes a measurement column."
+            )
+            return
+
+        measurement_column = st.selectbox(
+            "Select the measurement column",
+            options=numeric_columns,
+            key=f"measurement_column_{criterion['id']}",
+        )
+        timestamp_column = st.selectbox(
+            "Select an optional timestamp column",
+            options=["(None)"] + list(uploaded_df.columns),
+            help="Use timestamps to label the chart, or leave blank to use row order.",
+            key=f"timestamp_column_{criterion['id']}",
+        )
+
+        measurement_series = pd.to_numeric(
+            uploaded_df[measurement_column], errors="coerce"
+        )
+        invalid_measurements = measurement_series.isna().sum()
+        if invalid_measurements:
+            st.warning(
+                f"Ignored {invalid_measurements} non-numeric measurement rows in the upload."
+            )
+        measurement_series = measurement_series.dropna()
+        if measurement_series.empty:
+            st.error("No valid numeric measurements found after cleaning the upload.")
+            return
+
+        if timestamp_column != "(None)":
+            timestamp_series = pd.to_datetime(
+                uploaded_df[timestamp_column], errors="coerce"
+            )
+            timestamp_series = timestamp_series.loc[measurement_series.index]
+            if timestamp_series.isna().any():
+                st.warning(
+                    "Dropped rows with invalid timestamps to keep the series aligned."
+                )
+            valid_mask = timestamp_series.notna()
+            measurement_series = measurement_series.loc[valid_mask]
+            timestamp_series = timestamp_series.loc[valid_mask]
+
+            if measurement_series.empty:
+                st.error(
+                    "All rows were dropped after validating the timestamp column. Provide valid timestamps or clear the selection."
+                )
+                return
+
+        measurements = measurement_series.reset_index(drop=True).tolist()
+
     if not measurements:
         st.warning("Provide at least one numeric value to generate insights.")
         return
 
+    if criterion.get("evaluation_type") == "percentage_change" and baseline is None:
+        baseline = st.number_input(
+            "Reference/baseline value for change calculation",
+            value=float(measurements[0]) if measurements else 0.0,
+            format="%.3f",
+        )
+
     df = pd.DataFrame({"Measurement": measurements})
+    if timestamp_series is not None:
+        df.insert(0, "Timestamp", timestamp_series.reset_index(drop=True))
     assessments = [
         evaluate_measurement(value, criterion, baseline) for value in measurements
     ]
@@ -836,7 +925,9 @@ def render_result_explorer(index: Dict[str, Dict]) -> None:
 
     st.dataframe(df, use_container_width=True)
 
-    chart_data = df.copy()
+    chart_data = pd.DataFrame({"Measurement": measurements})
+    if timestamp_series is not None:
+        chart_data.index = timestamp_series.reset_index(drop=True)
     if criterion.get("evaluation_type") == "percentage_change" and baseline not in (None, 0):
         chart_data["Measurement"] = (
             (chart_data["Measurement"] - baseline).abs() / baseline
