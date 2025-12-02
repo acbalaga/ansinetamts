@@ -13,6 +13,7 @@ import pandas as pd
 import streamlit as st
 
 DEFAULT_TEST_DATA_PATH = Path(__file__).resolve().parent / "data" / "tests.json"
+PROFILE_STORE_PATH = Path(__file__).resolve().parent / "data" / "profiles.json"
 
 st.set_page_config(
     page_title="ANSI-NETA MTS 2023 Learning Lab",
@@ -192,6 +193,88 @@ def _suggest_seed_values(criterion: Dict) -> List[float]:
 IR_DEFAULT_RATING_KV = 34.5
 
 
+def _load_profile_store() -> Dict[str, Dict[str, float]]:
+    """Load the cached profile store from session state or disk.
+
+    Profiles are keyed by criterion id and contain user-supplied context such as
+    baseline values and DC test voltages. Storing them in a JSON file keeps
+    values available across reruns without introducing an external dependency.
+    """
+
+    if "profile_store" not in st.session_state:
+        profile_store: Dict[str, Dict[str, float]] = {}
+        if PROFILE_STORE_PATH.exists():
+            try:
+                raw_store = json.loads(PROFILE_STORE_PATH.read_text())
+                if isinstance(raw_store, dict):
+                    profile_store = raw_store
+            except json.JSONDecodeError:
+                st.warning(
+                    "Profile store could not be parsed and will be reset for this session."
+                )
+        st.session_state["profile_store"] = profile_store
+    return st.session_state["profile_store"]
+
+
+def get_profile(criterion_id: str) -> Dict[str, float]:
+    """Return the persisted profile for the requested criterion id, if any."""
+
+    profile_store = _load_profile_store()
+    profile = profile_store.get(criterion_id) or {}
+    if not isinstance(profile, dict):
+        return {}
+    return profile
+
+
+def validate_profile_inputs(
+    *,
+    requires_baseline: bool,
+    baseline: Optional[float],
+    nameplate_kv: Optional[float],
+    applied_kv: Optional[float],
+) -> List[str]:
+    """Return validation issues for the supplied profile fields."""
+
+    issues: List[str] = []
+    if requires_baseline and (baseline is None or baseline <= 0):
+        issues.append("Baseline must be a positive value to evaluate percent change.")
+    if nameplate_kv is not None and nameplate_kv <= 0:
+        issues.append("Nameplate voltage must be greater than zero.")
+    if applied_kv is not None and applied_kv <= 0:
+        issues.append("Applied DC test voltage must be greater than zero.")
+    return issues
+
+
+def persist_profile(
+    criterion_id: str,
+    *,
+    baseline: Optional[float],
+    nameplate_kv: Optional[float],
+    applied_kv: Optional[float],
+) -> Tuple[bool, str]:
+    """Save a profile entry for the given criterion id."""
+
+    profile_store = _load_profile_store()
+    profile_store[criterion_id] = {
+        key: value
+        for key, value in {
+            "baseline": baseline,
+            "nameplate_kv": nameplate_kv,
+            "applied_kv": applied_kv,
+        }.items()
+        if value is not None
+    }
+
+    try:
+        PROFILE_STORE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        PROFILE_STORE_PATH.write_text(json.dumps(profile_store, indent=2))
+        st.session_state["profile_store"] = profile_store
+    except OSError as exc:  # pragma: no cover - relies on filesystem access
+        return False, f"Could not persist profile: {exc}"
+
+    return True, "Profile saved for this criterion."
+
+
 def recommend_dc_test_voltage(
     nameplate_kv: float, table: List[Dict[str, float]]
 ) -> float:
@@ -230,6 +313,49 @@ def describe_test_voltage_application(
 def describe_result_meaning(status: str, test: Dict) -> Optional[str]:
     mapping = test.get("result_implications") or {}
     return mapping.get(status) or mapping.get("default")
+
+
+def render_profile_metadata(
+    *,
+    criterion_id: str,
+    requires_baseline: bool,
+    baseline: Optional[float],
+    voltage_context: Optional[Dict[str, float]],
+    profile: Dict[str, float],
+) -> None:
+    """Display the context values used for an evaluation and highlight gaps."""
+
+    profile_baseline = profile.get("baseline")
+    profile_nameplate = profile.get("nameplate_kv")
+    profile_applied = profile.get("applied_kv")
+
+    missing_fields: List[str] = []
+    if requires_baseline and not profile_baseline:
+        missing_fields.append("baseline")
+    if voltage_context and (not profile_nameplate or not profile_applied):
+        missing_fields.append("test voltage")
+
+    if missing_fields:
+        st.warning(
+            "Profile is missing key context (" + ", ".join(missing_fields) + "). "
+            "Use Save profile to reuse these defaults next time."
+        )
+
+    details: List[str] = []
+    effective_baseline = baseline or profile_baseline
+    if effective_baseline is not None:
+        details.append(f"Baseline: {effective_baseline:.3f}")
+    if voltage_context:
+        details.append(f"Nameplate kV: {voltage_context['nameplate_kv']:.1f}")
+        details.append(f"Applied DC kV: {voltage_context['applied_kv']:.1f}")
+    elif profile_nameplate or profile_applied:
+        if profile_nameplate:
+            details.append(f"Nameplate kV (saved): {profile_nameplate:.1f}")
+        if profile_applied:
+            details.append(f"Applied DC kV (saved): {profile_applied:.1f}")
+
+    if details:
+        st.caption(" | ".join(details))
 
 
 def render_deep_dive_section(test: Dict) -> None:
@@ -279,14 +405,20 @@ def render_deep_dive_section(test: Dict) -> None:
                 renderer(message)
 
 
-def render_voltage_context(test: Dict, widget_suffix: str) -> Optional[Dict[str, float]]:
+def render_voltage_context(
+    test: Dict, widget_suffix: str, profile: Optional[Dict[str, float]] = None
+) -> Optional[Dict[str, float]]:
     table = test.get("kv_recommendations")
     if not table:
         return None
 
     st.markdown("**Test voltage context**")
     col_rating, col_applied = st.columns(2)
-    default_rating = min(IR_DEFAULT_RATING_KV, table[-1]["max_rating_kv"])
+    default_rating = (
+        float(profile.get("nameplate_kv"))
+        if profile and profile.get("nameplate_kv")
+        else min(IR_DEFAULT_RATING_KV, table[-1]["max_rating_kv"])
+    )
     nameplate = col_rating.number_input(
         "Equipment nameplate voltage (kV line-line)",
         min_value=0.1,
@@ -297,7 +429,12 @@ def render_voltage_context(test: Dict, widget_suffix: str) -> Optional[Dict[str,
     recommended = recommend_dc_test_voltage(nameplate, table)
     col_rating.caption(f"Suggested ANSI/NETA DC test voltage: {recommended:.1f} kV")
 
-    default_applied = recommended or table[0]["dc_test_kv"]
+    default_applied = (
+        float(profile.get("applied_kv"))
+        if profile and profile.get("applied_kv")
+        else recommended
+        or table[0]["dc_test_kv"]
+    )
     applied = col_applied.number_input(
         "Applied DC test voltage (kV)",
         min_value=0.1,
@@ -688,11 +825,15 @@ def render_pass_fail_calculator(index: Dict[str, Dict]) -> None:
     )
     test = index[test_label]["test"]
     criterion = index[test_label]["criterion"]
+    profile = get_profile(criterion["id"])
+    requires_baseline = criterion.get("evaluation_type") == "percentage_change"
 
     voltage_context = None
     if test.get("kv_recommendations"):
         voltage_context = render_voltage_context(
-            test, widget_suffix=f"calculator_{criterion['id']}"
+            test,
+            widget_suffix=f"calculator_{criterion['id']}",
+            profile=profile,
         )
 
     col1, col2 = st.columns(2)
@@ -702,8 +843,14 @@ def render_pass_fail_calculator(index: Dict[str, Dict]) -> None:
         format="%.3f",
     )
     baseline = None
-    if criterion.get("evaluation_type") == "percentage_change":
-        baseline = col2.number_input("Reference/baseline value", value=0.0, format="%.3f")
+    if requires_baseline:
+        baseline_default = float(profile.get("baseline") or 1.0)
+        baseline = col2.number_input(
+            "Reference/baseline value",
+            value=baseline_default,
+            format="%.3f",
+            min_value=0.001,
+        )
     elif criterion.get("evaluation_type") == "ratio":
         col2.info("Polarization Index ratios already normalize to the 1- and 10-minute readings.")
     else:
@@ -734,6 +881,36 @@ def render_pass_fail_calculator(index: Dict[str, Dict]) -> None:
     if meaning:
         st.info(f"What this result means: {meaning}")
 
+    if requires_baseline and baseline in (None, 0):
+        st.warning("Provide a positive baseline to compute percent change for this criterion.")
+
+    save_inputs = {
+        "baseline": baseline if requires_baseline else None,
+        "nameplate_kv": voltage_context.get("nameplate_kv") if voltage_context else None,
+        "applied_kv": voltage_context.get("applied_kv") if voltage_context else None,
+    }
+    validation_issues = validate_profile_inputs(
+        requires_baseline=requires_baseline,
+        baseline=save_inputs["baseline"],
+        nameplate_kv=save_inputs["nameplate_kv"],
+        applied_kv=save_inputs["applied_kv"],
+    )
+    if st.button("Save profile", key=f"save_profile_{criterion['id']}"):
+        if validation_issues:
+            for issue in validation_issues:
+                st.error(issue)
+        else:
+            success, message = persist_profile(criterion["id"], **save_inputs)
+            (st.success if success else st.error)(message)
+
+    render_profile_metadata(
+        criterion_id=criterion["id"],
+        requires_baseline=requires_baseline,
+        baseline=baseline,
+        voltage_context=voltage_context,
+        profile=profile,
+    )
+
     if is_dga_test(test):
         render_dga_gas_breakdown(
             test,
@@ -757,11 +934,15 @@ def render_result_explorer(index: Dict[str, Dict]) -> None:
     )
     test = index[selected]["test"]
     criterion = index[selected]["criterion"]
+    profile = get_profile(criterion["id"])
+    requires_baseline = criterion.get("evaluation_type") == "percentage_change"
 
     voltage_context = None
     if test.get("kv_recommendations"):
         voltage_context = render_voltage_context(
-            test, widget_suffix=f"explorer_{criterion['id']}"
+            test,
+            widget_suffix=f"explorer_{criterion['id']}",
+            profile=profile,
         )
 
     uploaded_file = st.file_uploader(
@@ -793,11 +974,13 @@ def render_result_explorer(index: Dict[str, Dict]) -> None:
         measurements, invalid_tokens = parse_measurement_series(raw_values)
         if invalid_tokens:
             st.warning(f"Ignored invalid entries: {', '.join(invalid_tokens)}")
-        if criterion.get("evaluation_type") == "percentage_change":
+        if requires_baseline:
+            baseline_default = float(profile.get("baseline") or 100.0)
             baseline = st.number_input(
                 "Reference/baseline value for change calculation",
-                value=100.0,
+                value=baseline_default,
                 format="%.3f",
+                min_value=0.001,
             )
     else:
         scenario = st.select_slider(
@@ -897,11 +1080,13 @@ def render_result_explorer(index: Dict[str, Dict]) -> None:
         st.warning("Provide at least one numeric value to generate insights.")
         return
 
-    if criterion.get("evaluation_type") == "percentage_change" and baseline is None:
+    if requires_baseline and baseline is None:
+        fallback_baseline = profile.get("baseline") or (measurements[0] if measurements else 1.0)
         baseline = st.number_input(
             "Reference/baseline value for change calculation",
-            value=float(measurements[0]) if measurements else 0.0,
+            value=float(fallback_baseline),
             format="%.3f",
+            min_value=0.001,
         )
 
     df = pd.DataFrame({"Measurement": measurements})
@@ -952,6 +1137,36 @@ def render_result_explorer(index: Dict[str, Dict]) -> None:
         st.info(
             f"Latest classification ({statuses[-1]}): {meaning}"
         )
+
+    if requires_baseline and (baseline is None or baseline <= 0):
+        st.warning("Add a positive baseline to enable percent-change calculations for this profile.")
+
+    save_inputs = {
+        "baseline": baseline if requires_baseline else None,
+        "nameplate_kv": voltage_context.get("nameplate_kv") if voltage_context else None,
+        "applied_kv": voltage_context.get("applied_kv") if voltage_context else None,
+    }
+    validation_issues = validate_profile_inputs(
+        requires_baseline=requires_baseline,
+        baseline=save_inputs["baseline"],
+        nameplate_kv=save_inputs["nameplate_kv"],
+        applied_kv=save_inputs["applied_kv"],
+    )
+    if st.button("Save profile", key=f"save_profile_explorer_{criterion['id']}"):
+        if validation_issues:
+            for issue in validation_issues:
+                st.error(issue)
+        else:
+            success, message = persist_profile(criterion["id"], **save_inputs)
+            (st.success if success else st.error)(message)
+
+    render_profile_metadata(
+        criterion_id=criterion["id"],
+        requires_baseline=requires_baseline,
+        baseline=baseline,
+        voltage_context=voltage_context,
+        profile=profile,
+    )
 
     if is_dga_test(test):
         render_dga_gas_breakdown(

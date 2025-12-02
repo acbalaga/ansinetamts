@@ -17,6 +17,7 @@ class StubStreamlit:
     infos: List[str] = field(default_factory=list)
     captions: List[str] = field(default_factory=list)
     dataframe_data: Optional[pd.DataFrame] = None
+    session_state: Dict[str, Any] = field(default_factory=dict)
 
     def subheader(self, *_args: Any, **_kwargs: Any) -> None:
         return None
@@ -59,6 +60,9 @@ class StubStreamlit:
 
     def metric(self, *_args: Any, **_kwargs: Any) -> None:
         return None
+
+    def button(self, *_args: Any, **_kwargs: Any) -> bool:
+        return False
 
     def dataframe(self, data: pd.DataFrame, **_kwargs: Any) -> None:
         self.dataframe_data = data
